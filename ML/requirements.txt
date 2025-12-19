@@ -1,0 +1,12 @@
+pandas
+numpy
+scikit-learn
+pyyaml
+joblib
+jupyter
+tqdm
+python-dotenv
+requests
+fastapi
+uvicorn[standard]      # upgrade from plain uvicorn
+pyarrow

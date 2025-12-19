@@ -1,0 +1,58 @@
+# virtual env
+.venv/
+venv/
+env/
+
+# python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pkl
+
+# local pyenv
+.python-version
+
+# data artifacts
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# large model artifacts
+models/*
+*.joblib
+*.pt
+*.h5
+*.model
+*.meta
+*.pth
+
+# parquet/csv backups
+*.parquet
+*.csv
+*.tsv
+
+# experiment outputs
+logs/
+results/
+runs/
+checkpoints/
+tmp/
+cache/
+artifacts/
+
+# notebooks checkpoints
+.ipynb_checkpoints/
+
+# editor local files
+.DS_Store
+.vscode/
+.idea/
+
+# internal old folders
+_old/
+
+
+# personal notes
+notebooks/*
