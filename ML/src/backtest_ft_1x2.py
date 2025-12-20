@@ -24,8 +24,43 @@ PROCESSED_DIR = ROOT_DIR / "data" / "processed"
 
 
 def load_all_dates(df_all: pd.DataFrame) -> list[date]:
-    dates = sorted(df_all["match_date"].dt.date.unique())
-    return dates
+    """Return sorted unique match_date as date objects."""
+    return sorted(df_all["match_date"].dt.date.unique())
+
+
+def _empty_result(
+    start_date: str | None,
+    end_date: str | None,
+    min_edge: float,
+    stake: float,
+    kelly_mult: float,
+    rows_before: int,
+    rows_after: int,
+) -> dict:
+    """
+    Helper to build the empty result structure so we do not repeat ourselves.
+    This preserves the exact keys and shapes you already use.
+    """
+    return {
+        "summary": {
+            "start_date": start_date,
+            "end_date": end_date,
+            "min_edge": float(min_edge),
+            "stake": float(stake),
+            "kelly_mult": float(kelly_mult),
+            "rows_before_division_filter": int(rows_before),
+            "rows_after_division_filter": int(rows_after),
+            "total_matches": 0,
+            "total_bets": 0,
+            "total_staked": 0.0,
+            "total_profit": 0.0,
+            "overall_roi": 0.0,
+        },
+        "markets": [],
+        "league_stats_df": pd.DataFrame(),
+        "daily_equity_df": pd.DataFrame(),
+        "bets_df": pd.DataFrame(),
+    }
 
 
 def backtest_ft_1x2_core(
@@ -45,7 +80,6 @@ def backtest_ft_1x2_core(
       - daily_equity_df: DataFrame (per-day equity)
       - bets_df: DataFrame (per-bet logs)
     """
-
     # ------------------------------------------------------------------
     # Load data and filter to allowed divisions
     # ------------------------------------------------------------------
@@ -56,9 +90,9 @@ def backtest_ft_1x2_core(
             "Column 'division' not found in features.csv; cannot filter by league."
         )
 
-    before = len(df_all)
+    rows_before = len(df_all)
     df_all = df_all[df_all["division"].isin(ALLOWED_DIVISIONS)].copy()
-    after = len(df_all)
+    rows_after = len(df_all)
 
     # Precompute normalized implied probabilities terms if odds exist
     if {"odd_home", "odd_draw", "odd_away"}.issubset(df_all.columns):
@@ -78,26 +112,15 @@ def backtest_ft_1x2_core(
 
     all_dates = load_all_dates(df_all)
     if not all_dates:
-        return {
-            "summary": {
-                "start_date": start_date,
-                "end_date": end_date,
-                "min_edge": float(min_edge),
-                "stake": float(stake),
-                "kelly_mult": float(kelly_mult),
-                "rows_before_division_filter": int(before),
-                "rows_after_division_filter": int(after),
-                "total_matches": 0,
-                "total_bets": 0,
-                "total_staked": 0.0,
-                "total_profit": 0.0,
-                "overall_roi": 0.0,
-            },
-            "markets": [],
-            "league_stats_df": pd.DataFrame(),
-            "daily_equity_df": pd.DataFrame(),
-            "bets_df": pd.DataFrame(),
-        }
+        return _empty_result(
+            start_date=start_date,
+            end_date=end_date,
+            min_edge=min_edge,
+            stake=stake,
+            kelly_mult=kelly_mult,
+            rows_before=rows_before,
+            rows_after=rows_after,
+        )
 
     # ------------------------------------------------------------------
     # Resolve date range
@@ -114,26 +137,16 @@ def backtest_ft_1x2_core(
 
     date_list = [d for d in all_dates if sd <= d <= ed]
     if not date_list:
-        return {
-            "summary": {
-                "start_date": str(sd),
-                "end_date": str(ed),
-                "min_edge": float(min_edge),
-                "stake": float(stake),
-                "kelly_mult": float(kelly_mult),
-                "rows_before_division_filter": int(before),
-                "rows_after_division_filter": int(after),
-                "total_matches": 0,
-                "total_bets": 0,
-                "total_staked": 0.0,
-                "total_profit": 0.0,
-                "overall_roi": 0.0,
-            },
-            "markets": [],
-            "league_stats_df": pd.DataFrame(),
-            "daily_equity_df": pd.DataFrame(),
-            "bets_df": pd.DataFrame(),
-        }
+        # preserve your existing summary content (stringified sd/ed)
+        return _empty_result(
+            start_date=str(sd),
+            end_date=str(ed),
+            min_edge=min_edge,
+            stake=stake,
+            kelly_mult=kelly_mult,
+            rows_before=rows_before,
+            rows_after=rows_after,
+        )
 
     # ------------------------------------------------------------------
     # Define FT 1X2 models / markets
@@ -186,27 +199,16 @@ def backtest_ft_1x2_core(
         }
 
     if not models:
-        # nothing to do
-        return {
-            "summary": {
-                "start_date": str(sd),
-                "end_date": str(ed),
-                "min_edge": float(min_edge),
-                "stake": float(stake),
-                "kelly_mult": float(kelly_mult),
-                "rows_before_division_filter": int(before),
-                "rows_after_division_filter": int(after),
-                "total_matches": 0,
-                "total_bets": 0,
-                "total_staked": 0.0,
-                "total_profit": 0.0,
-                "overall_roi": 0.0,
-            },
-            "markets": [],
-            "league_stats_df": pd.DataFrame(),
-            "daily_equity_df": pd.DataFrame(),
-            "bets_df": pd.DataFrame(),
-        }
+        # nothing to do – keep same empty structure
+        return _empty_result(
+            start_date=str(sd),
+            end_date=str(ed),
+            min_edge=min_edge,
+            stake=stake,
+            kelly_mult=kelly_mult,
+            rows_before=rows_before,
+            rows_after=rows_after,
+        )
 
     # ------------------------------------------------------------------
     # Run backtest loop
@@ -244,10 +246,12 @@ def backtest_ft_1x2_core(
             if odds_col not in df_day.columns or target_col not in df_day.columns:
                 continue
 
+            # Model probabilities
             X = build_X(df_day, feats)
             p_raw_all = model.predict_proba(X)[:, 1]
             df_day[f"prob_raw_{key}"] = p_raw_all
 
+            # Iterate over matches of that day for this market
             for _, row in df_day.iterrows():
                 p_raw = row[f"prob_raw_{key}"]
                 odds = row[odds_col]
@@ -272,6 +276,7 @@ def backtest_ft_1x2_core(
                 if edge < min_edge:
                     continue
 
+                # Flat stake or Kelly
                 if kelly_mult > 0.0:
                     f_kelly = (p_hat * odds - 1.0) / (odds - 1.0)
                     if f_kelly <= 0:
@@ -280,6 +285,7 @@ def backtest_ft_1x2_core(
                 else:
                     bet_size = stake
 
+                # Update counters
                 bets[key] += 1
                 total_bets += 1
                 stake_sum[key] += bet_size
@@ -294,6 +300,7 @@ def backtest_ft_1x2_core(
                 profit_sum[key] += profit
                 total_profit += profit
 
+                # Log bet row
                 bet_rows.append(
                     {
                         "date": d,
@@ -313,16 +320,16 @@ def backtest_ft_1x2_core(
                     }
                 )
 
+    # If no bets, still return a structured result
     if total_bets == 0:
-        # still return structured empty result
         summary = {
             "start_date": str(sd),
             "end_date": str(ed),
             "min_edge": float(min_edge),
             "stake": float(stake),
             "kelly_mult": float(kelly_mult),
-            "rows_before_division_filter": int(before),
-            "rows_after_division_filter": int(after),
+            "rows_before_division_filter": int(rows_before),
+            "rows_after_division_filter": int(rows_after),
             "total_matches": int(total_matches),
             "total_bets": 0,
             "total_staked": 0.0,
@@ -339,7 +346,9 @@ def backtest_ft_1x2_core(
 
     bets_df = pd.DataFrame(bet_rows)
 
-    # per-division stats
+    # ------------------------------------------------------------------
+    # Per-division stats (league_stats_df)
+    # ------------------------------------------------------------------
     if "division" in bets_df.columns:
         league_stats_df = (
             bets_df.groupby("division")
@@ -356,7 +365,9 @@ def backtest_ft_1x2_core(
     else:
         league_stats_df = pd.DataFrame()
 
-    # equity curve
+    # ------------------------------------------------------------------
+    # Equity curve (daily_equity_df)
+    # ------------------------------------------------------------------
     daily_equity_df = (
         bets_df.groupby("date")
         .agg(staked=("stake", "sum"), profit=("profit", "sum"))
@@ -365,8 +376,13 @@ def backtest_ft_1x2_core(
     )
     daily_equity_df["cum_profit"] = daily_equity_df["profit"].cumsum()
     daily_equity_df["cum_staked"] = daily_equity_df["staked"].cumsum()
-    daily_equity_df["cum_roi"] = daily_equity_df["cum_profit"] / daily_equity_df["cum_staked"]
+    daily_equity_df["cum_roi"] = (
+        daily_equity_df["cum_profit"] / daily_equity_df["cum_staked"]
+    )
 
+    # ------------------------------------------------------------------
+    # Global market summaries and overall ROI
+    # ------------------------------------------------------------------
     overall_roi = total_profit / total_staked if total_staked > 0 else 0.0
 
     markets_summary = []
@@ -395,8 +411,8 @@ def backtest_ft_1x2_core(
         "min_edge": float(min_edge),
         "stake": float(stake),
         "kelly_mult": float(kelly_mult),
-        "rows_before_division_filter": int(before),
-        "rows_after_division_filter": int(after),
+        "rows_before_division_filter": int(rows_before),
+        "rows_after_division_filter": int(rows_after),
         "total_matches": int(total_matches),
         "total_bets": int(total_bets),
         "total_staked": float(total_staked),
@@ -416,8 +432,6 @@ def backtest_ft_1x2_core(
 # ----------------------------------------------------------------------
 # CLI wrapper that keeps your current behavior (printing, CSV, MD)
 # ----------------------------------------------------------------------
-
-
 def backtest_ft_1x2_cli(
     start_date: str | None,
     end_date: str | None,
