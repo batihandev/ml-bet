@@ -1,5 +1,6 @@
 import argparse
 from pathlib import Path
+from typing import Optional
 
 import joblib
 import pandas as pd
@@ -48,7 +49,7 @@ def build_X(df_src: pd.DataFrame, feature_list: list[str]) -> pd.DataFrame:
 
 
 
-def get_predictions_df(pred_date: str | None = None) -> pd.DataFrame:
+def get_predictions_df(pred_date: Optional[str] = None) -> pd.DataFrame:
     """
     Core prediction function.
     Returns a DataFrame for the given date with probability columns added.

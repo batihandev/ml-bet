@@ -191,7 +191,7 @@ def save_processed(df: pd.DataFrame) -> None:
         print(f"  {parquet_path}")
 
 
-def main():
+def run_build_dataset_process():
     print("Loading raw matches...")
     df_raw = load_raw_matches()
     print(f"Raw shape: {df_raw.shape}")
@@ -202,17 +202,20 @@ def main():
 
     if "division" in df_clean.columns:
         print(f"Unique divisions before filter: {df_clean['division'].nunique()}")
-        print(df_clean["division"].value_counts().sort_index().head(50))
+        # print(df_clean["division"].value_counts().sort_index().head(50))
 
     print("Filtering matches (allowed divisions + minimum size)...")
     df_filtered = filter_matches(df_clean)
     print(f"Filtered shape: {df_filtered.shape}")
     if "division" in df_filtered.columns:
         print(f"Unique divisions after filter: {df_filtered['division'].nunique()}")
-        print(df_filtered["division"].value_counts().sort_index())
+        # print(df_filtered["division"].value_counts().sort_index())
 
     print("Saving processed dataset...")
     save_processed(df_filtered)
+
+def main():
+    run_build_dataset_process()
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from typing import Optional
 
 import joblib
 import numpy as np
@@ -246,7 +247,14 @@ def train_single_model(
     print(f"Saved metadata to {metadata_path}")
 
 
-def main():
+def run_training_process(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    cutoff_date: Optional[str] = None,
+):
+    """
+    Programmatic entry point for training models.
+    """
     print("Loading feature dataset...")
     df = load_features()
     print(f"Features shape (full): {df.shape}")
@@ -254,50 +262,69 @@ def main():
     # -------------------------------------------
     # Global date filtering before splitting
     # -------------------------------------------
-    if TRAIN_START_DATE is not None:
-        start_dt = pd.to_datetime(TRAIN_START_DATE)
+    if start_date is not None:
+        start_dt = pd.to_datetime(start_date)
         df = df[df["match_date"] >= start_dt]
 
-    if TRAIN_END_DATE is not None:
-        end_dt = pd.to_datetime(TRAIN_END_DATE)
+    if end_date is not None:
+        end_dt = pd.to_datetime(end_date)
         df = df[df["match_date"] <= end_dt]
 
     print(f"Features shape after TRAIN window: {df.shape}")
 
-    feature_cols = select_feature_columns(df)
-    print(f"Using {len(feature_cols)} feature columns")
+    # Handle global cutoff override
+    global FIXED_CUTOFF_DATE
+    old_cutoff = FIXED_CUTOFF_DATE
+    if cutoff_date:
+        FIXED_CUTOFF_DATE = cutoff_date
+    
+    try:
+        feature_cols = select_feature_columns(df)
+        print(f"Using {len(feature_cols)} feature columns")
 
-    # existing HT/FT pattern targets
-    htft_targets = [
-        ("target_ht_home_ft_home", "model_ht_home_ft_home"),
-        ("target_ht_home_ft_draw", "model_ht_home_ft_draw"),
-        ("target_ht_home_ft_away", "model_ht_home_ft_away"),
-        ("target_ht_draw_ft_home", "model_ht_draw_ft_home"),
-        ("target_ht_draw_ft_draw", "model_ht_draw_ft_draw"),
-        ("target_ht_draw_ft_away", "model_ht_draw_ft_away"),
-        ("target_ht_away_ft_home", "model_ht_away_ft_home"),
-        ("target_ht_away_ft_draw", "model_ht_away_ft_draw"),
-        ("target_ht_away_ft_away", "model_ht_away_ft_away"),
-    ]
+        # existing HT/FT pattern targets
+        htft_targets = [
+            ("target_ht_home_ft_home", "model_ht_home_ft_home"),
+            ("target_ht_home_ft_draw", "model_ht_home_ft_draw"),
+            ("target_ht_home_ft_away", "model_ht_home_ft_away"),
+            ("target_ht_draw_ft_home", "model_ht_draw_ft_home"),
+            ("target_ht_draw_ft_draw", "model_ht_draw_ft_draw"),
+            ("target_ht_draw_ft_away", "model_ht_draw_ft_away"),
+            ("target_ht_away_ft_home", "model_ht_away_ft_home"),
+            ("target_ht_away_ft_draw", "model_ht_away_ft_draw"),
+            ("target_ht_away_ft_away", "model_ht_away_ft_away"),
+        ]
 
-    # FT 1X2 binary targets
-    ft_targets = [
-        ("ft_home_win", "model_ft_home_win"),
-        ("ft_draw", "model_ft_draw"),
-        ("ft_away_win", "model_ft_away_win"),
-    ]
+        # FT 1X2 binary targets
+        ft_targets = [
+            ("ft_home_win", "model_ft_home_win"),
+            ("ft_draw", "model_ft_draw"),
+            ("ft_away_win", "model_ft_away_win"),
+        ]
 
-    for target_col, model_name in htft_targets:
-        if target_col not in df.columns:
-            print(f"WARNING: missing {target_col}, skipping.")
-            continue
-        train_single_model(df, feature_cols, target_col, model_name)
+        for target_col, model_name in htft_targets:
+            if target_col not in df.columns:
+                print(f"WARNING: missing {target_col}, skipping.")
+                continue
+            train_single_model(df, feature_cols, target_col, model_name)
 
-    for target_col, model_name in ft_targets:
-        if target_col not in df.columns:
-            print(f"WARNING: missing {target_col}, skipping.")
-            continue
-        train_single_model(df, feature_cols, target_col, model_name)
+        for target_col, model_name in ft_targets:
+            if target_col not in df.columns:
+                print(f"WARNING: missing {target_col}, skipping.")
+                continue
+            train_single_model(df, feature_cols, target_col, model_name)
+    finally:
+        # Restore old cutoff if needed, though usually this runs in a fresh process
+        # via uvicorn background tasks it stays in same process.
+        FIXED_CUTOFF_DATE = old_cutoff
+
+
+def main():
+    run_training_process(
+        start_date=TRAIN_START_DATE,
+        end_date=TRAIN_END_DATE,
+        cutoff_date=FIXED_CUTOFF_DATE,
+    )
 
 
 if __name__ == "__main__":

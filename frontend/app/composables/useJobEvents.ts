@@ -35,8 +35,32 @@ export function useJobEvents() {
         const msg: JobEvent = JSON.parse(event.data)
         lastEvent.value = msg
 
-        if (msg.type === 'backtest_started') {
+        if (
+          msg.type === 'backtest_started' ||
+          msg.type === 'training_started' ||
+          msg.type === 'dataset_build_started' ||
+          msg.type === 'features_build_started'
+        ) {
           isProcessing.value = true
+          if (msg.type === 'training_started') {
+            toast.add({
+              title: 'Training started',
+              description: 'The model training job has been dispatched.',
+              color: 'info'
+            })
+          } else if (msg.type === 'dataset_build_started') {
+            toast.add({
+              title: 'Dataset build started',
+              description: 'Processing raw Matches.csv...',
+              color: 'info'
+            })
+          } else if (msg.type === 'features_build_started') {
+            toast.add({
+              title: 'Features build started',
+              description: 'Engineering features from dataset...',
+              color: 'info'
+            })
+          }
         } else if (msg.type === 'backtest_completed') {
           isProcessing.value = false
 
@@ -52,10 +76,36 @@ export function useJobEvents() {
                 : 'Backtest completed successfully.',
             color: roi !== null && roi > 0 ? 'success' : 'info'
           })
-        } else if (msg.type === 'backtest_failed') {
+        } else if (msg.type === 'training_completed') {
           isProcessing.value = false
           toast.add({
-            title: 'Backtest failed',
+            title: 'Training finished',
+            description: 'All models have been retrained successfully.',
+            color: 'success'
+          })
+        } else if (msg.type === 'dataset_build_completed') {
+          isProcessing.value = false
+          toast.add({
+            title: 'Dataset ready',
+            description: 'matches.csv has been built.',
+            color: 'success'
+          })
+        } else if (msg.type === 'features_build_completed') {
+          isProcessing.value = false
+          toast.add({
+            title: 'Features ready',
+            description: 'features.csv has been built.',
+            color: 'success'
+          })
+        } else if (
+          msg.type === 'backtest_failed' ||
+          msg.type === 'training_failed' ||
+          msg.type === 'dataset_build_failed' ||
+          msg.type === 'features_build_failed'
+        ) {
+          isProcessing.value = false
+          toast.add({
+            title: 'Job failed',
             description: msg.payload?.error ?? 'Check backend logs.',
             color: 'error'
           })

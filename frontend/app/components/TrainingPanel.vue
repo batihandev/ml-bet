@@ -2,37 +2,32 @@
 import { reactive, ref } from 'vue'
 
 const form = reactive({
-  trainStart: '',
-  trainEnd: '',
-  cutoffDate: ''
+  trainStart: '2020-01-01',
+  trainEnd: '2024-06-01',
+  cutoffDate: '2023-12-01'
 })
 
 const loading = ref(false)
 const statusMessage = ref<string | null>(null)
 
 async function runTraining() {
+  const config = useRuntimeConfig()
   loading.value = true
   statusMessage.value = null
 
   try {
-    // TODO: hook to backend later, e.g.
-    // const config = useRuntimeConfig()
-    // await $fetch(`${config.public.apiBase}/train`, {
-    //   method: 'POST',
-    //   body: {
-    //     TRAIN_START_DATE: form.trainStart || null,
-    //     TRAIN_END_DATE: form.trainEnd || null,
-    //     FIXED_CUTOFF_DATE: form.cutoffDate || null
-    //   }
-    // })
+    await $fetch(`${config.public.apiBase}/train`, {
+      method: 'POST',
+      body: {
+        train_start: form.trainStart || null,
+        train_end: form.trainEnd || null,
+        cutoff_date: form.cutoffDate || null
+      }
+    })
 
-    // for now just simulate success
-    await new Promise((resolve) => setTimeout(resolve, 600))
-    statusMessage.value =
-      'Training job dispatched (mock). Wire backend when ready.'
-  } catch (e) {
-    statusMessage.value = 'Training failed (see console / backend logs).'
-    // console.error(e)
+    statusMessage.value = 'Training job dispatched. Watch for status in the banner/toast.'
+  } catch (e: any) {
+    statusMessage.value = e?.data?.detail || 'Training failed to dispatch.'
   } finally {
     loading.value = false
   }

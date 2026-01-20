@@ -15,6 +15,27 @@ const form = reactive({
 })
 
 const loading = ref(false)
+const metaLoading = ref(false)
+const teams = ref<string[]>([])
+const divisions = ref<string[]>([])
+
+async function fetchMeta() {
+  metaLoading.value = true
+  try {
+    const [teamRes, divRes] = await Promise.all([
+      $fetch<{ teams: string[] }>(`${config.public.apiBase}/meta/teams`),
+      $fetch<{ divisions: string[] }>(`${config.public.apiBase}/meta/divisions`)
+    ])
+    teams.value = teamRes.teams
+    divisions.value = divRes.divisions
+  } catch (err) {
+    console.error('Failed to fetch metadata', err)
+  } finally {
+    metaLoading.value = false
+  }
+}
+
+onMounted(fetchMeta)
 
 type MatchInfo = {
   division: string
@@ -113,7 +134,12 @@ async function runLivePrediction() {
         <UForm :state="form" class="space-y-4">
           <div class="grid gap-4 md:grid-cols-4">
             <UFormField label="Division" help="League code (e.g. E0, D1, T1).">
-              <UInput v-model="form.division" />
+              <USelectMenu
+                v-model="form.division"
+                :items="divisions"
+                :loading="metaLoading"
+                searchable
+              />
             </UFormField>
 
             <UFormField label="Match date" help="YYYY-MM-DD">
@@ -121,11 +147,23 @@ async function runLivePrediction() {
             </UFormField>
 
             <UFormField label="Home team">
-              <UInput v-model="form.homeTeam" placeholder="Liverpool" />
+              <USelectMenu
+                v-model="form.homeTeam"
+                :items="teams"
+                :loading="metaLoading"
+                searchable
+                placeholder="Search home team..."
+              />
             </UFormField>
 
             <UFormField label="Away team">
-              <UInput v-model="form.awayTeam" placeholder="Beşiktaş" />
+              <USelectMenu
+                v-model="form.awayTeam"
+                :items="teams"
+                :loading="metaLoading"
+                searchable
+                placeholder="Search away team..."
+              />
             </UFormField>
           </div>
 

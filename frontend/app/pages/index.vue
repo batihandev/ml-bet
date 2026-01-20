@@ -27,6 +27,10 @@ const heroDescription =
       ]"
     />
 
+    <UContainer content-class="pb-12">
+      <DataStatus />
+    </UContainer>
+
     <TrainingPanel />
 
     <BacktestPanel />

@@ -1,5 +1,6 @@
 import argparse
 from datetime import date
+from typing import Optional
 from pathlib import Path
 
 import numpy as np
@@ -29,8 +30,8 @@ def load_all_dates(df_all: pd.DataFrame) -> list[date]:
 
 
 def _empty_result(
-    start_date: str | None,
-    end_date: str | None,
+    start_date: Optional[str],
+    end_date: Optional[str],
     min_edge: float,
     stake: float,
     kelly_mult: float,
@@ -64,8 +65,8 @@ def _empty_result(
 
 
 def backtest_ft_1x2_core(
-    start_date: str | None,
-    end_date: str | None,
+    start_date: Optional[str],
+    end_date: Optional[str],
     min_edge: float,
     stake: float,
     kelly_mult: float = 0.0,
@@ -433,12 +434,12 @@ def backtest_ft_1x2_core(
 # CLI wrapper that keeps your current behavior (printing, CSV, MD)
 # ----------------------------------------------------------------------
 def backtest_ft_1x2_cli(
-    start_date: str | None,
-    end_date: str | None,
+    start_date: Optional[str],
+    end_date: Optional[str],
     min_edge: float,
     stake: float,
-    out_csv: str | None,
-    out_md: str | None,
+    out_csv: Optional[str],
+    out_md: Optional[str],
     kelly_mult: float = 0.0,
 ) -> None:
     result = backtest_ft_1x2_core(

@@ -540,7 +540,7 @@ def save_features(df: pd.DataFrame) -> None:
 # ----------------------------------------------------------------------
 # Main pipeline
 # ----------------------------------------------------------------------
-def main():
+def run_build_features_process():
     print("Loading processed matches...")
     matches = load_processed_matches()
     print(f"Matches shape: {matches.shape}")
@@ -551,6 +551,9 @@ def main():
 
     print("Saving feature dataset...")
     save_features(features)
+
+def main():
+    run_build_features_process()
 
 
 if __name__ == "__main__":
