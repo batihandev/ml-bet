@@ -113,7 +113,7 @@ watch(lastEvent, (val) => {
             class="h-5 w-5"
           />
         </div>
-        <div class="text-sm font-medium mb-1 truncate">data-2000-2025.zip</div>
+        <div class="text-sm font-medium mb-1 truncate">{{ status?.zip.name || 'data-2000-2025.zip' }}</div>
         <div class="text-[11px] text-muted truncate">
           {{ status?.zip.exists ? `${formatSize(status.zip.size)} • ${formatDate(status.zip.modified)}` : 'Zip missing' }}
         </div>

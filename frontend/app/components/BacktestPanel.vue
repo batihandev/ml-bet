@@ -113,30 +113,10 @@ async function runBacktest() {
     equity.value = res.equity ?? []
   } catch (err) {
     console.error('Backtest error', err)
-    // You’ll also get a toast via WebSocket “failed” event, if the backend re-raises.
   } finally {
     loading.value = false
   }
 }
-const equityPath = computed(() => {
-  if (!equity.value.length) return ''
-  const margin = 20
-  const width = 600
-  const height = 160
-  const data = equity.value.map((e) => e.cum_profit)
-  const min = Math.min(0, ...data)
-  const max = Math.max(0.1, ...data)
-  const range = max - min
-
-  return data
-    .map((val, i) => {
-      const x = margin + (i / (data.length - 1)) * (width - 2 * margin)
-      const y =
-        height - margin - ((val - min) / range) * (height - 2 * margin)
-      return `${x},${y}`
-    })
-    .join(' ')
-})
 </script>
 
 <template>
@@ -267,74 +247,31 @@ const equityPath = computed(() => {
       <div class="grid gap-6 lg:grid-cols-[minmax(0,1.5fr),minmax(0,1.2fr)]">
         <!-- Markets + equity -->
         <div class="space-y-4">
-          <UCard>
-            <h3 class="mb-3 text-sm font-semibold">Per-market performance</h3>
+            <UCard>
+              <h3 class="mb-3 text-sm font-semibold">Per-market performance</h3>
 
-            <UTable
-              v-if="markets.length"
-              :data="markets"
-              :columns="marketColumns"
-            />
+              <PerformanceTable
+                :data="markets"
+                :columns="marketColumns"
+                empty-message="Run a backtest to see per-market stats."
+              />
+            </UCard>
 
-            <p v-else class="text-xs text-muted">
-              Run a backtest to see per-market stats.
-            </p>
-          </UCard>
-
-          <UCard>
-            <h3 class="mb-3 text-sm font-semibold">Equity curve</h3>
-            <div v-if="equity.length" class="h-40 w-full overflow-hidden">
-              <svg
-                width="100%"
-                height="100%"
-                viewBox="0 0 600 160"
-                preserveAspectRatio="none"
-              >
-                <!-- Grid line for zero -->
-                <line
-                  x1="0"
-                  y1="140"
-                  x2="600"
-                  y2="140"
-                  stroke="currentColor"
-                  stroke-dasharray="2 4"
-                  class="text-gray-200 dark:text-gray-800"
-                />
-                <!-- Path -->
-                <polyline
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  :points="equityPath"
-                  class="text-primary-500"
-                />
-              </svg>
-            </div>
-            <div
-              v-else
-              class="flex h-40 items-center justify-center rounded-lg border border-dashed border-gray-300/60 text-[11px] text-muted dark:border-gray-700/80"
-            >
-              Run a backtest to see the equity curve.
-            </div>
-          </UCard>
+            <UCard>
+              <h3 class="mb-3 text-sm font-semibold">Equity curve</h3>
+              <EquityCurve :equity="equity" />
+            </UCard>
         </div>
 
         <!-- Per-division breakdown -->
         <UCard>
           <h3 class="mb-3 text-sm font-semibold">Per-division breakdown</h3>
 
-          <UTable
-            v-if="divisions.length"
+          <PerformanceTable
             :data="divisions"
             :columns="divisionColumns"
+            empty-message="Once wired to the backend, this table will show which leagues actually make money."
           />
-
-          <p v-else class="text-xs text-muted">
-            Once wired to the backend, this table will show which leagues
-            actually make money.
-          </p>
         </UCard>
       </div>
     </div>

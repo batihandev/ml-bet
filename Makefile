@@ -27,48 +27,25 @@ activate:
 	@echo " source $(VENV)/bin/activate"
 
 dataset:
-	$(VENV)/bin/python ML/src/build_dataset.py
+	$(VENV)/bin/python ML/src/dataset/cli.py
 
 features:
-	$(VENV)/bin/python ML/src/features.py
+	$(VENV)/bin/python ML/src/features/pipeline.py
 
 train:
-	$(VENV)/bin/python ML/src/train_model.py
+	$(VENV)/bin/python ML/src/training/cli.py
 
 train_last5:
 	TRAIN_START_DATE=$(shell date -d '5 years ago' +%Y-%m-%d) \
 	$(VENV)/bin/python ML/src/train_model.py
 
 predict:
-	$(VENV)/bin/python ML/src/predict.py
+	$(VENV)/bin/python ML/src/prediction/cli.py
 
 clean:
 	rm -rf $(VENV)
 
-eval:
-	$(VENV)/bin/python ML/src/eval_day.py --date $(DATE) --thr $(THR)
 
-efr:
-	$(VENV)/bin/python ML/src/eval_from_predict.py --date $(DATE) --thr $(THR)
-frd:
-	$(VENV)/bin/python ML/src/find_rule_day.py --start-date $(DATE)
-frd-no-date:
-	$(VENV)/bin/python ML/src/find_rule_day.py
-
-# Backtest all 9 HT/FT patterns over a date range
-# Usage:
-#   make backtest START=YYYY-MM-DD END=YYYY-MM-DD THR=0.6 OUT=backtest_all9_0p6.csv
-#
-# This will produce:
-#   - CSV: OUT
-#   - Markdown summary: same name as OUT but with .md (e.g. backtest_all9_0p6.md)
-backtest:
-	$(VENV)/bin/python ML/src/backtest_range.py \
-		--start-date $(START) \
-		--end-date $(END) \
-		--thr $(THR) \
-		--out-csv $(OUT) \
-		--out-md $(OUT:.csv=.md)
 
 # ------------------------------------------------------------------
 # Examples:
@@ -128,7 +105,7 @@ backtest:
 # make backtest_ft START=2023-01-01 END=2025-06-01 EDGE=0.030 STAKE=1 OUT_CSV=/dev/null OUT_MD=/dev/null
 
 backtest_ft:
-	$(VENV)/bin/python ML/src/backtest_ft_1x2.py \
+	$(VENV)/bin/python ML/src/backtest/cli.py \
 		--start-date $(START) \
 		--end-date $(END) \
 		--min-edge $(EDGE) \
@@ -185,8 +162,8 @@ train_for_long:
 	TRAIN_START_DATE=2016-07-15 \
 	TRAIN_END_DATE=2024-06-01 \
 	FIXED_CUTOFF_DATE=2023-12-01 \
-	$(VENV)/bin/python ML/src/train_model.py
+	$(VENV)/bin/python ML/src/training/cli.py
 
 
 backend:
-	PYTHONPATH=ML/src $(VENV)/bin/python -m uvicorn api_main:app --reload --port 8050
+	PYTHONPATH=ML/src $(VENV)/bin/python -m uvicorn api.main:app --reload --port 8050
