@@ -24,14 +24,8 @@ useSeoMeta({
 
 <template>
   <UApp>
-    <AppHeader />
-
-    <UMain class="min-h-[calc(100vh-5rem)]">
+    <NuxtLayout>
       <NuxtPage />
-    </UMain>
-
-    <USeparator />
-    <JobStatusBanner />
-    <AppFooter />
+    </NuxtLayout>
   </UApp>
 </template>
