@@ -13,6 +13,7 @@ from build_dataset import run_build_dataset_process
 from features import run_build_features_process
 from fastapi import BackgroundTasks
 import os
+import zipfile
 
 
 class BacktestRequest(BaseModel):
@@ -196,12 +197,34 @@ async def get_data_status():
     raw_path = os.path.join(root, "data", "raw", "Matches.csv")
     dataset_path = os.path.join(root, "data", "processed", "matches.csv")
     features_path = os.path.join(root, "data", "processed", "features.csv")
+    zip_path = os.path.join(root, "data", "club-football-match-data-2000-2025.zip")
     
     return {
         "raw": get_file_info(raw_path),
         "dataset": get_file_info(dataset_path),
-        "features": get_file_info(features_path)
+        "features": get_file_info(features_path),
+        "zip": get_file_info(zip_path)
     }
+
+async def background_unzip_raw():
+    await progress_manager.broadcast({"type": "unzip_started", "payload": {}})
+    try:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        zip_path = os.path.join(root, "data", "club-football-match-data-2000-2025.zip")
+        raw_dir = os.path.join(root, "data", "raw")
+        os.makedirs(raw_dir, exist_ok=True)
+        
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(raw_dir)
+            
+        await progress_manager.broadcast({"type": "unzip_completed", "payload": {}})
+    except Exception as exc:
+        await progress_manager.broadcast({"type": "unzip_failed", "payload": {"error": str(exc)}})
+
+@app.post("/data/unzip-raw")
+async def unzip_raw_api(background_tasks: BackgroundTasks):
+    background_tasks.add_task(background_unzip_raw)
+    return {"status": "unzip_dispatched"}
 
 async def background_build_dataset():
     await progress_manager.broadcast({"type": "dataset_build_started", "payload": {}})

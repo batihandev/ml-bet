@@ -12,6 +12,7 @@ interface DataStatus {
   raw: FileStatus
   dataset: FileStatus
   features: FileStatus
+  zip: FileStatus
 }
 
 const status = ref<DataStatus | null>(null)
@@ -23,6 +24,17 @@ async function fetchStatus() {
     status.value = data
   } catch (e) {
     console.error('Failed to fetch data status', e)
+  }
+}
+
+async function unzipRaw() {
+  loading.value = true
+  try {
+    await $fetch(`${config.public.apiBase}/data/unzip-raw`, { method: 'POST' })
+  } catch (e: any) {
+    toast.add({ title: 'Error', description: e.data?.detail || 'Failed to start unzip', color: 'error' })
+  } finally {
+    loading.value = false
   }
 }
 
@@ -68,7 +80,11 @@ onMounted(() => {
 // Refresh status when jobs complete
 const { lastEvent } = useJobEvents()
 watch(lastEvent, (val) => {
-  if (val?.type === 'dataset_build_completed' || val?.type === 'features_build_completed') {
+  if (
+    val?.type === 'dataset_build_completed' || 
+    val?.type === 'features_build_completed' ||
+    val?.type === 'unzip_completed'
+  ) {
     fetchStatus()
   }
 })
@@ -86,11 +102,27 @@ watch(lastEvent, (val) => {
       </div>
     </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <!-- Zip File -->
+      <UCard :ui="{ body: { padding: 'p-4' } }">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs font-semibold uppercase tracking-wider text-muted">Zip Source</span>
+          <UIcon 
+            :name="status?.zip.exists ? 'i-heroicons-archive-box' : 'i-heroicons-x-circle'" 
+            :class="status?.zip.exists ? 'text-blue-500' : 'text-red-500'"
+            class="h-5 w-5"
+          />
+        </div>
+        <div class="text-sm font-medium mb-1 truncate">data-2000-2025.zip</div>
+        <div class="text-[11px] text-muted truncate">
+          {{ status?.zip.exists ? `${formatSize(status.zip.size)} • ${formatDate(status.zip.modified)}` : 'Zip missing' }}
+        </div>
+      </UCard>
+
       <!-- Raw Data -->
       <UCard :ui="{ body: { padding: 'p-4' } }">
         <div class="flex items-center justify-between mb-2">
-          <span class="text-xs font-semibold uppercase tracking-wider text-muted">Raw Source</span>
+          <span class="text-xs font-semibold uppercase tracking-wider text-muted">Raw CSV</span>
           <UIcon 
             :name="status?.raw.exists ? 'i-heroicons-check-circle' : 'i-heroicons-x-circle'" 
             :class="status?.raw.exists ? 'text-green-500' : 'text-red-500'"
@@ -98,8 +130,18 @@ watch(lastEvent, (val) => {
           />
         </div>
         <div class="text-sm font-medium mb-1 truncate">Matches.csv</div>
-        <div class="text-[11px] text-muted">
-          {{ status?.raw.exists ? `${formatSize(status.raw.size)} • ${formatDate(status.raw.modified)}` : 'File not found' }}
+        <div class="flex items-end justify-between">
+          <div class="text-[11px] text-muted truncate">
+            {{ status?.raw.exists ? `${formatSize(status.raw.size)} • ${formatDate(status.raw.modified)}` : 'Needs unzip' }}
+          </div>
+          <UButton
+            v-if="!status?.raw.exists && status?.zip.exists"
+            size="2xs"
+            variant="ghost"
+            label="Unzip"
+            :loading="loading"
+            @click="unzipRaw"
+          />
         </div>
       </UCard>
 

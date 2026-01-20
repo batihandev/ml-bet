@@ -1,14 +1,22 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { reactive, ref, computed } from 'vue'
 
 const form = reactive({
   trainStart: '2020-01-01',
-  trainEnd: '2024-06-01',
-  cutoffDate: '2023-12-01'
+  trainEnd: '2025-06-30',
+  cutoffDate: '2024-07-01'
 })
 
 const loading = ref(false)
 const statusMessage = ref<string | null>(null)
+
+// Compute the day before cutoff for display
+const lastTrainDate = computed(() => {
+  if (!form.cutoffDate) return 'auto'
+  const d = new Date(form.cutoffDate)
+  d.setDate(d.getDate() - 1)
+  return d.toISOString().split('T')[0]
+})
 
 async function runTraining() {
   const config = useRuntimeConfig()
@@ -46,8 +54,8 @@ async function runTraining() {
         <UForm :state="form" class="space-y-4">
           <div class="grid gap-4 md:grid-cols-3">
             <UFormField
-              label="Train start date"
-              help="First match date included in training (TRAIN_START_DATE)."
+              label="Data start date"
+              help="First match loaded into memory."
             >
               <UInput
                 v-model="form.trainStart"
@@ -57,8 +65,8 @@ async function runTraining() {
             </UFormField>
 
             <UFormField
-              label="Train end date"
-              help="Last match date included in training (TRAIN_END_DATE)."
+              label="Data end date"
+              help="Last match loaded into memory."
             >
               <UInput
                 v-model="form.trainEnd"
@@ -68,8 +76,8 @@ async function runTraining() {
             </UFormField>
 
             <UFormField
-              label="Validation cutoff"
-              help="Split date for time-based validation (FIXED_CUTOFF_DATE)."
+              label="Validation starts at"
+              help="First match used for validation (not training)."
             >
               <UInput
                 v-model="form.cutoffDate"
@@ -79,10 +87,21 @@ async function runTraining() {
             </UFormField>
           </div>
 
+          <!-- Live summary -->
+          <div class="rounded-lg bg-gray-100 dark:bg-gray-800 p-3 text-xs space-y-1">
+            <div class="flex justify-between">
+              <span class="text-muted">Training:</span>
+              <span class="font-mono">{{ form.trainStart || 'auto' }} → {{ lastTrainDate }}</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-muted">Validation:</span>
+              <span class="font-mono">{{ form.cutoffDate || 'auto' }} → {{ form.trainEnd || 'auto' }}</span>
+            </div>
+          </div>
+
           <div class="flex items-center justify-between gap-4">
             <p class="text-xs text-muted">
-              Leave fields empty to let the backend pick defaults (full range /
-              quantile cutoff).
+              Leave fields empty to let the backend pick defaults.
             </p>
 
             <UButton
@@ -103,31 +122,24 @@ async function runTraining() {
 
       <!-- Right: explainer -->
       <UCard class="space-y-3">
-        <h3 class="text-sm font-semibold">How these dates are used</h3>
+        <h3 class="text-sm font-semibold">How splitting works</h3>
+        <p class="text-xs text-muted">
+          The code in <code class="font-mono text-[11px]">train_model.py</code> does:
+        </p>
+        <pre class="text-[11px] bg-gray-100 dark:bg-gray-800 p-2 rounded overflow-x-auto font-mono">train_mask = df["match_date"] &lt; cutoff
+val_mask   = df["match_date"] >= cutoff</pre>
         <ul class="space-y-2 text-xs text-muted">
           <li>
-            <span class="font-medium">Train start:</span>
-            lower bound for
-            <code class="font-mono text-[11px]">match_date</code> in your
-            feature set.
+            <span class="font-medium text-emerald-600 dark:text-emerald-400">Training:</span>
+            All matches <strong>before</strong> the cutoff date.
           </li>
           <li>
-            <span class="font-medium">Train end:</span>
-            upper bound for
-            <code class="font-mono text-[11px]">match_date</code> in your
-            feature set.
+            <span class="font-medium text-amber-600 dark:text-amber-400">Validation:</span>
+            All matches <strong>on or after</strong> the cutoff date.
           </li>
-          <li>
-            <span class="font-medium">Validation cutoff:</span>
-            everything before this date is training, everything on/after is used
-            as validation in
-            <code class="font-mono text-[11px]">train_model.py</code>.
-          </li>
-          <li>
-            <span class="font-medium">Divisions / leagues:</span>
-            filtering to
-            <code class="font-mono text-[11px]">ALLOWED_DIVISIONS</code>
-            happens inside the Python code; this UI only controls dates.
+          <li class="pt-1 border-t border-gray-200 dark:border-gray-700">
+            <span class="font-medium">No overlap:</span>
+            Validation data is never seen during training.
           </li>
         </ul>
       </UCard>

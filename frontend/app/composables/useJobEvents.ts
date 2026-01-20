@@ -8,16 +8,17 @@ type JobEvent =
   | { type: 'backtest_failed'; payload: any }
   | { type: string; payload: any }
 
-export function useJobEvents() {
-  const isProcessing = ref(false)
-  const lastEvent = ref<JobEvent | null>(null)
-  const socket = ref<WebSocket | null>(null)
+// shared state
+const isProcessing = ref(false)
+const lastEvent = ref<JobEvent | null>(null)
+const socket = ref<WebSocket | null>(null)
 
+export function useJobEvents() {
   const config = useRuntimeConfig()
   const toast = useToast()
 
   const connect = () => {
-    if (socket.value) return
+    if (socket.value || import.meta.server) return
 
     const apiBase = config.public.apiBase as string
     const wsUrl = apiBase.replace(/^http/, 'ws') + '/ws/progress'
@@ -26,7 +27,6 @@ export function useJobEvents() {
     socket.value = ws
 
     ws.onopen = () => {
-      // Optionally send a ping to keep server loop alive
       ws.send('hello')
     }
 
@@ -39,7 +39,8 @@ export function useJobEvents() {
           msg.type === 'backtest_started' ||
           msg.type === 'training_started' ||
           msg.type === 'dataset_build_started' ||
-          msg.type === 'features_build_started'
+          msg.type === 'features_build_started' ||
+          msg.type === 'unzip_started'
         ) {
           isProcessing.value = true
           if (msg.type === 'training_started') {
@@ -58,6 +59,12 @@ export function useJobEvents() {
             toast.add({
               title: 'Features build started',
               description: 'Engineering features from dataset...',
+              color: 'info'
+            })
+          } else if (msg.type === 'unzip_started') {
+            toast.add({
+              title: 'Extraction started',
+              description: 'Unzipping raw match data...',
               color: 'info'
             })
           }
@@ -97,11 +104,19 @@ export function useJobEvents() {
             description: 'features.csv has been built.',
             color: 'success'
           })
+        } else if (msg.type === 'unzip_completed') {
+          isProcessing.value = false
+          toast.add({
+            title: 'Extraction ready',
+            description: 'Raw data extracted to data/raw/.',
+            color: 'success'
+          })
         } else if (
           msg.type === 'backtest_failed' ||
           msg.type === 'training_failed' ||
           msg.type === 'dataset_build_failed' ||
-          msg.type === 'features_build_failed'
+          msg.type === 'features_build_failed' ||
+          msg.type === 'unzip_failed'
         ) {
           isProcessing.value = false
           toast.add({
@@ -119,20 +134,11 @@ export function useJobEvents() {
       socket.value = null
       isProcessing.value = false
     }
-
-    ws.onerror = () => {
-      // Fail silently for now; you can add a toast if you want.
-    }
   }
 
-  onMounted(connect)
-
-  onBeforeUnmount(() => {
-    if (socket.value) {
-      socket.value.close()
-      socket.value = null
-    }
-  })
+  if (import.meta.client) {
+    onMounted(connect)
+  }
 
   return {
     isProcessing,
