@@ -73,23 +73,34 @@ def add_basic_targets(df: pd.DataFrame) -> pd.DataFrame:
 
 def add_league_context(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    df["season"] = pd.to_datetime(df["match_date"], errors="coerce").dt.year
+    df["match_date"] = pd.to_datetime(df["match_date"], errors="coerce")
+    df["season"] = df["match_date"].dt.year
+    if "match_id" not in df.columns:
+        df["match_id"] = range(len(df))
 
     df["league_total_goals"] = (
         pd.to_numeric(df["ft_home_goals"], errors="coerce")
         + pd.to_numeric(df["ft_away_goals"], errors="coerce")
     )
 
-    league_stats = (
-        df.groupby(["division", "season"], dropna=False)
-        .agg(
-            league_avg_goals=("league_total_goals", "mean"),
-            league_home_win_rate=("ft_home_win", "mean"),
-            league_draw_rate=("ft_draw", "mean"),
-            league_away_win_rate=("ft_away_win", "mean"),
-        )
-        .reset_index()
-    )
+    # Ensure chronological order before expanding stats to avoid leakage.
+    df = df.sort_values(["division", "season", "match_date", "match_id"]).reset_index(drop=True)
 
-    df = df.merge(league_stats, on=["division", "season"], how="left")
+    def _expanding_mean_past(s: pd.Series) -> pd.Series:
+        # Use only past matches (shifted) to avoid future leakage.
+        return s.shift(1).expanding().mean()
+
+    grp = df.groupby(["division", "season"], dropna=False, sort=False)
+    df["league_avg_goals"] = (
+        grp["league_total_goals"].apply(_expanding_mean_past).reset_index(level=[0, 1], drop=True)
+    )
+    df["league_home_win_rate"] = (
+        grp["ft_home_win"].apply(_expanding_mean_past).reset_index(level=[0, 1], drop=True)
+    )
+    df["league_draw_rate"] = (
+        grp["ft_draw"].apply(_expanding_mean_past).reset_index(level=[0, 1], drop=True)
+    )
+    df["league_away_win_rate"] = (
+        grp["ft_away_win"].apply(_expanding_mean_past).reset_index(level=[0, 1], drop=True)
+    )
     return df

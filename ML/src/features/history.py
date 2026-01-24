@@ -66,6 +66,8 @@ def build_team_history(df: pd.DataFrame) -> pd.DataFrame:
 
     def compute_rolling(group: pd.DataFrame) -> pd.DataFrame:
         group = group.sort_values(["match_date", "match_id"]).reset_index(drop=True)
+        if "team" not in group.columns:
+            group["team"] = group.name
         group["days_since_last"] = group["match_date"].diff().dt.days.shift(1)
 
         dates = group["match_date"].values
@@ -121,7 +123,11 @@ def build_team_history(df: pd.DataFrame) -> pd.DataFrame:
 
         return group
 
-    team_matches = team_matches.groupby("team", group_keys=False).apply(compute_rolling, include_groups=True)
+    try:
+        team_matches = team_matches.groupby("team", group_keys=False).apply(compute_rolling, include_groups=False)
+    except TypeError:
+        # Older pandas versions don't support include_groups.
+        team_matches = team_matches.groupby("team", group_keys=False).apply(compute_rolling)
     return team_matches
 
 def merge_team_features(matches: pd.DataFrame, team_matches: pd.DataFrame) -> pd.DataFrame:

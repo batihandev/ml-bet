@@ -1,6 +1,7 @@
 <template>
   <div class="flex flex-col min-h-screen">
     <AppHeader />
+    <JobStatusBanner />
     <div class="flex flex-1">
       <AppSidebar />
       <UMain class="flex-1 p-6">
@@ -8,7 +9,6 @@
       </UMain>
     </div>
     <USeparator />
-    <JobStatusBanner />
     <AppFooter />
   </div>
 </template>

@@ -48,14 +48,25 @@ def index_predictions(predictions: List[Dict[str, Any]]) -> Dict[int, Dict[str, 
         pred_by_id[mid] = r
     return pred_by_id
 
+def compute_kelly_fraction(prob: float, odds: float) -> float:
+    """
+    Compute the Kelly fraction for a single bet.
+    """
+    try:
+        p = float(prob)
+        o = float(odds)
+    except (TypeError, ValueError):
+        return 0.0
+    if o <= 1.0:
+        return 0.0
+    return (p * o - 1.0) / (o - 1.0)
+
 def compute_stake(stake_base: float, kelly_mult: float, prob: float, odds: float) -> float:
     """
-    Compute stake amount based on flat or fractional Kelly.
+    Compute stake amount based on flat or fractional Kelly (scaled by stake_base).
     """
     if kelly_mult > 0:
-        # Kelly % = (p * b - q) / b where b = odds - 1
-        # Simplified: (p * odds - 1) / (odds - 1)
-        kelly_f = (prob * odds - 1.0) / (odds - 1.0)
+        kelly_f = compute_kelly_fraction(prob, odds)
         if kelly_f <= 0:
             return 0.0
         return stake_base * kelly_mult * kelly_f

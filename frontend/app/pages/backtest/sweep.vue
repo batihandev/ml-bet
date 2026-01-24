@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { reactive, ref, computed, h } from 'vue'
+import { reactive, ref, computed, h, resolveComponent } from 'vue'
 import type { TableColumn } from '@nuxt/ui'
 
 const config = useRuntimeConfig()
 const router = useRouter()
+
+const UButton = resolveComponent('UButton')
 
 const form = reactive({
   startDate: '2024-12-30',
@@ -24,6 +26,9 @@ const form = reactive({
 const loading = ref(false)
 const results = ref<any[]>([])
 const sweepStats = ref<any>(null)
+const showAllRows = ref(false)
+const detailsOpen = ref(false)
+const selectedCell = ref<any | null>(null)
 
 async function runSweep() {
   loading.value = true
@@ -87,26 +92,32 @@ function runSingleBacktest(cell: any) {
   })
 }
 
+function openDetails(cell: any) {
+  selectedCell.value = cell
+  detailsOpen.value = true
+}
+
+const topResults = computed(() => {
+  if (showAllRows.value) return results.value
+  return results.value.slice(0, 8)
+})
+
 const columns: TableColumn<any>[] = [
+  {
+    id: 'details',
+    header: '',
+    cell: ({ row }) =>
+      h(UButton, {
+        icon: 'i-lucide-info',
+        size: 'sm',
+        variant: 'subtle',
+        color: 'info',
+        label: 'Details',
+        onClick: () => openDetails(row.original)
+      })
+  },
   { accessorKey: 'min_edge', header: 'Min Edge' },
   { accessorKey: 'min_ev', header: 'Min EV' },
-  {
-    accessorKey: 'pass_rate_top',
-    header: 'Pass Rate (Top)',
-    cell: ({ row }) => {
-      const v =
-        row.original.n_top_prob_passes_gate / row.original.n_all_valid || 0
-      return `${(v * 100).toFixed(1)}%`
-    }
-  },
-  {
-    accessorKey: 'pass_rate_any',
-    header: 'Pass Rate (Any)',
-    cell: ({ row }) => {
-      const v = row.original.n_any_passes_gate / row.original.n_all_valid || 0
-      return `${(v * 100).toFixed(1)}%`
-    }
-  },
   { accessorKey: 'bets', header: 'Bets' },
   {
     accessorKey: 'roi',
@@ -129,107 +140,31 @@ const columns: TableColumn<any>[] = [
     }
   },
   {
+    accessorKey: 'pass_rate_top',
+    header: 'Pass Rate (Top)',
+    cell: ({ row }) => {
+      const v =
+        row.original.n_top_prob_passes_gate / row.original.n_all_valid || 0
+      return `${(v * 100).toFixed(1)}%`
+    }
+  },
+  {
     accessorKey: 'avg_ev',
-    header: 'Avg EV (placed)',
+    header: 'Avg EV',
     cell: ({ row }) => (row.getValue('avg_ev') as number)?.toFixed(3)
   },
   {
-    accessorKey: 'avg_odds',
-    header: 'Avg Odds (placed)',
-    cell: ({ row }) => (row.getValue('avg_odds') as number)?.toFixed(2)
-  },
-  {
-    accessorKey: 'median_odds',
-    header: 'Med Odds (placed)',
-    cell: ({ row }) => (row.getValue('median_odds') as number)?.toFixed(2)
-  },
-  {
-    accessorKey: 'p90_odds',
-    header: 'P90 Odds (placed)',
-    cell: ({ row }) => (row.getValue('p90_odds') as number)?.toFixed(2)
-  },
-  {
-    id: 'mixes',
-    header: 'Mixes',
-    cell: ({ row }) => {
-      const placed = row.original.stats_placed_bets?.mix || {}
-      const topValid = row.original.stats_all_valid?.mix || {}
-      const topGate = row.original.stats_top_passes_gate?.mix || {}
-
-      return h(
-        'UPopover',
-        { mode: 'hover' },
-        {
-          default: () =>
-            h('UButton', {
-              icon: 'i-lucide-pie-chart',
-              size: 'xs',
-              variant: 'ghost',
-              label: `${(placed.home * 100).toFixed(0)}/${(placed.draw * 100).toFixed(0)}/${(placed.away * 100).toFixed(0)}%`
-            }),
-          content: () =>
-            h('div', { class: 'p-3 text-xs space-y-3 w-56' }, [
-              h('div', {}, [
-                h(
-                  'div',
-                  { class: 'font-bold border-b mb-1 pb-1' },
-                  'Placed Bets Mix'
-                ),
-                h('div', { class: 'flex justify-between' }, [
-                  h('span', {}, `H: ${(placed.home * 100).toFixed(1)}%`),
-                  h('span', {}, `D: ${(placed.draw * 100).toFixed(1)}%`),
-                  h('span', {}, `A: ${(placed.away * 100).toFixed(1)}%`)
-                ])
-              ]),
-              h('div', {}, [
-                h(
-                  'div',
-                  { class: 'font-bold border-b mb-1 pb-1' },
-                  'Top-prob (all valid)'
-                ),
-                h('div', { class: 'flex justify-between' }, [
-                  h('span', {}, `H: ${(topValid.home * 100).toFixed(1)}%`),
-                  h('span', {}, `D: ${(topValid.draw * 100).toFixed(1)}%`),
-                  h('span', {}, `A: ${(topValid.away * 100).toFixed(1)}%`)
-                ])
-              ]),
-              h('div', {}, [
-                h(
-                  'div',
-                  { class: 'font-bold border-b mb-1 pb-1' },
-                  'Top-prob (passed gate)'
-                ),
-                h('div', { class: 'flex justify-between' }, [
-                  h('span', {}, `H: ${(topGate.home * 100).toFixed(1)}%`),
-                  h('span', {}, `D: ${(topGate.draw * 100).toFixed(1)}%`),
-                  h('span', {}, `A: ${(topGate.away * 100).toFixed(1)}%`)
-                ])
-              ])
-            ])
-        }
-      )
-    }
-  },
-  {
-    accessorKey: 'avg_edge',
-    header: 'Avg Edge',
-    cell: ({ row }) => (row.getValue('avg_edge') as number)?.toFixed(3)
-  },
-  {
-    id: 'actions',
+    id: 'run',
     header: '',
-    cell: ({ row }) => {
-      return h(
-        'UButton',
-        {
-          icon: 'i-lucide-external-link',
-          size: 'xs',
-          variant: 'ghost',
-          onClick: () => runSingleBacktest(row.original)
-        },
-        'Run'
-      )
-    }
+    cell: ({ row }) =>
+      h(UButton, {
+        icon: 'i-lucide-external-link',
+        size: 'sm',
+        variant: 'solid',
+        color: 'success',
+        label: 'Run',
+        onClick: () => runSingleBacktest(row.original)
+      })
   }
 ]
 
@@ -395,7 +330,7 @@ function getHeatmapColor(roi: number, bets: number) {
           <div class="overflow-x-auto">
             <table class="w-full border-collapse text-[11px] min-w-[400px]">
               <thead>
-                <tr>
+                <tr class="max-w-12">
                   <th class="p-1 border bg-gray-50 dark:bg-gray-900">
                     EV \ Eg
                   </th>
@@ -411,7 +346,7 @@ function getHeatmapColor(roi: number, bets: number) {
               <tbody>
                 <tr v-for="row in matrix.grid" :key="row.ev">
                   <td
-                    class="p-1 border font-medium bg-gray-50 dark:bg-gray-900 text-right"
+                    class="p-1 border font-medium bg-gray-50 dark:bg-gray-900 text-right w-12"
                   >
                     {{ row.ev }}
                   </td>
@@ -438,12 +373,20 @@ function getHeatmapColor(roi: number, bets: number) {
           <template #header>
             <div class="flex items-center justify-between">
               <h3 class="text-sm font-semibold">Top Performers</h3>
-              <span class="text-[10px] text-muted">Sorted by ROI (p05)</span>
+              <div class="flex items-center gap-3">
+                <span class="text-[10px] text-muted">Sorted by ROI (p05)</span>
+                <UButton
+                  size="xs"
+                  variant="ghost"
+                  :label="showAllRows ? 'Show top 8' : 'Show all'"
+                  @click="showAllRows = !showAllRows"
+                />
+              </div>
             </div>
           </template>
 
           <UTable
-            :data="results"
+            :data="topResults"
             :columns="columns"
             class="w-full"
             :loading="loading"
@@ -458,5 +401,179 @@ function getHeatmapColor(roi: number, bets: number) {
     >
       Adjust parameters and run sweep to find optimal betting zones.
     </div>
+
+    <UModal
+      v-model:open="detailsOpen"
+      :ui="{
+        overlay: 'bg-black/60 backdrop-blur-sm'
+      }"
+    >
+      <template #content>
+        <UCard v-if="selectedCell" class="shadow-xl">
+          <template #header>
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-xs text-muted">Sweep cell details</p>
+                <h3 class="text-sm font-semibold">
+                  Edge ≥ {{ selectedCell.min_edge }} • EV ≥
+                  {{ selectedCell.min_ev }}
+                </h3>
+              </div>
+              <UButton
+                icon="i-lucide-x"
+                variant="soft"
+                color="primary"
+                size="sm"
+                @click="detailsOpen = false"
+              />
+            </div>
+          </template>
+
+          <div class="grid gap-4 text-xs">
+            <div class="grid gap-2 sm:grid-cols-2">
+              <div
+                class="rounded-lg border border-gray-200/60 p-3 dark:border-gray-800/80"
+              >
+                <p class="text-[10px] uppercase text-muted">Performance</p>
+                <p class="mt-1 font-semibold">
+                  ROI:
+                  <span
+                    :class="
+                      selectedCell.roi >= 0
+                        ? 'text-emerald-500'
+                        : 'text-red-400'
+                    "
+                  >
+                    {{ (selectedCell.roi * 100).toFixed(2) }}%
+                  </span>
+                  <span class="text-muted">
+                    (p05:
+                    {{
+                      selectedCell.roi_p05
+                        ? (selectedCell.roi_p05 * 100).toFixed(2)
+                        : '–'
+                    }}%)
+                  </span>
+                </p>
+                <p>Bets: {{ selectedCell.bets }}</p>
+                <p>
+                  Profit:
+                  <span
+                    :class="
+                      selectedCell.profit >= 0
+                        ? 'text-emerald-500'
+                        : 'text-red-400'
+                    "
+                  >
+                    {{ selectedCell.profit }}
+                  </span>
+                </p>
+              </div>
+              <div
+                class="rounded-lg border border-gray-200/60 p-3 dark:border-gray-800/80"
+              >
+                <p class="text-[10px] uppercase text-muted">Pass Rates</p>
+                <p>
+                  Top-prob:
+                  {{
+                    (
+                      (selectedCell.n_top_prob_passes_gate /
+                        (selectedCell.n_all_valid || 1)) *
+                      100
+                    ).toFixed(1)
+                  }}%
+                </p>
+                <p>
+                  Any outcome:
+                  {{
+                    (
+                      (selectedCell.n_any_passes_gate /
+                        (selectedCell.n_all_valid || 1)) *
+                      100
+                    ).toFixed(1)
+                  }}%
+                </p>
+                <p>All valid: {{ selectedCell.n_all_valid_matches }}</p>
+              </div>
+            </div>
+
+            <div class="grid gap-2 sm:grid-cols-2">
+              <div
+                class="rounded-lg border border-gray-200/60 p-3 dark:border-gray-800/80"
+              >
+                <p class="text-[10px] uppercase text-muted">Placed odds</p>
+                <p>Avg: {{ selectedCell.avg_odds?.toFixed(2) }}</p>
+                <p>Median: {{ selectedCell.median_odds?.toFixed(2) }}</p>
+                <p>P90: {{ selectedCell.p90_odds?.toFixed(2) }}</p>
+                <p>
+                  Avg EV:
+                  <span class="text-indigo-300">{{
+                    selectedCell.avg_ev?.toFixed(3)
+                  }}</span>
+                </p>
+                <p>
+                  Avg Edge:
+                  <span class="text-sky-300">{{
+                    selectedCell.avg_edge?.toFixed(3)
+                  }}</span>
+                </p>
+              </div>
+              <div
+                class="rounded-lg border border-gray-200/60 p-3 dark:border-gray-800/80"
+              >
+                <p class="text-[10px] uppercase text-muted">Bet mixes</p>
+                <p>
+                  Placed:
+                  <span class="text-emerald-200">
+                    {{
+                      `${(selectedCell.stats_placed_bets?.mix?.home * 100).toFixed(1)}% H / ${(selectedCell.stats_placed_bets?.mix?.draw * 100).toFixed(1)}% D / ${(selectedCell.stats_placed_bets?.mix?.away * 100).toFixed(1)}% A`
+                    }}
+                  </span>
+                </p>
+                <p>
+                  Top valid:
+                  <span class="text-sky-200">
+                    {{
+                      `${(selectedCell.stats_top_prob_all_valid?.mix?.home * 100).toFixed(1)}% H / ${(selectedCell.stats_top_prob_all_valid?.mix?.draw * 100).toFixed(1)}% D / ${(selectedCell.stats_top_prob_all_valid?.mix?.away * 100).toFixed(1)}% A`
+                    }}
+                  </span>
+                </p>
+                <p>
+                  Top passed:
+                  <span class="text-amber-200">
+                    {{
+                      `${(selectedCell.stats_top_passes_gate?.mix?.home * 100).toFixed(1)}% H / ${(selectedCell.stats_top_passes_gate?.mix?.draw * 100).toFixed(1)}% D / ${(selectedCell.stats_top_passes_gate?.mix?.away * 100).toFixed(1)}% A`
+                    }}
+                  </span>
+                </p>
+              </div>
+            </div>
+
+            <div
+              class="rounded-lg border border-gray-200/60 p-3 dark:border-gray-800/80"
+            >
+              <p class="text-[10px] uppercase text-muted">Diagnostics</p>
+              <div class="grid gap-2 sm:grid-cols-3">
+                <div>
+                  <p class="text-[10px] text-muted">All valid</p>
+                  <p>{{ selectedCell.n_all_valid }}</p>
+                </div>
+                <div>
+                  <p class="text-[10px] text-muted">Top pass</p>
+                  <p>{{ selectedCell.n_top_prob_passes_gate }}</p>
+                </div>
+                <div>
+                  <p class="text-[10px] text-muted">Any pass</p>
+                  <p>{{ selectedCell.n_any_passes_gate }}</p>
+                </div>
+              </div>
+              <p class="mt-2 text-[10px] text-muted">
+                {{ selectedCell.all_valid_definition }}
+              </p>
+            </div>
+          </div>
+        </UCard>
+      </template>
+    </UModal>
   </div>
 </template>

@@ -38,6 +38,7 @@ export function useJobEvents() {
         if (
           msg.type === 'backtest_started' ||
           msg.type === 'training_started' ||
+          msg.type === 'sweep_started' ||
           msg.type === 'dataset_build_started' ||
           msg.type === 'features_build_started' ||
           msg.type === 'unzip_started'
@@ -68,6 +69,13 @@ export function useJobEvents() {
               color: 'info'
             })
           }
+        } else if (msg.type === 'sweep_completed') {
+          isProcessing.value = false
+          toast.add({
+            title: 'Sweep finished',
+            description: `Cells computed: ${msg.payload?.cells_count ?? 0}`,
+            color: 'success'
+          })
         } else if (msg.type === 'backtest_completed') {
           isProcessing.value = false
 
@@ -114,6 +122,7 @@ export function useJobEvents() {
         } else if (
           msg.type === 'backtest_failed' ||
           msg.type === 'training_failed' ||
+          msg.type === 'sweep_failed' ||
           msg.type === 'dataset_build_failed' ||
           msg.type === 'features_build_failed' ||
           msg.type === 'unzip_failed'

@@ -13,6 +13,7 @@ from .backtest_utils import (
     compute_stake, 
     compute_profit, 
     get_actual_outcome,
+    compute_kelly_fraction,
     compute_max_drawdown
 )
 from .betting_logic import select_bet
@@ -108,9 +109,9 @@ def backtest_production_1x2(
     debug_payload = predictions[0].get("debug_info") if predictions and debug == 1 else None
 
     # Diagnostic groups
-    group_all_valid = []  # Matches that pass ALL_VALID criteria
-    group_top_passes = [] # subset of group_all_valid where top outcome passes gate
-    bet_rows = []         # subset of group_all_valid where a bet is actually placed
+    group_top_prob_all_valid = []  # Matches with pred + labeled + valid odds (top-prob outcome only)
+    group_top_prob_passes_gate = [] # subset where top-prob outcome passes gate
+    bet_rows = []                   # subset where a bet is actually placed
     
     n_any_passes_gate = 0
     n_top_prob_passes_gate = 0
@@ -118,6 +119,8 @@ def backtest_production_1x2(
     skipped_invalid_odds = 0
     skipped_no_value = 0
     
+    bankroll = float(stake) if kelly_mult > 0 else None
+
     for _, match_row in df_bt.iterrows():
         match_id = int(match_row["match_id"])
         
@@ -142,7 +145,7 @@ def backtest_production_1x2(
 
         # ALL_VALID group
         top_metric = max(metrics, key=lambda x: x["prob"])
-        group_all_valid.append({
+        group_top_prob_all_valid.append({
             "outcome": top_metric["outcome"],
             "odds": top_metric["odds"]
         })
@@ -156,7 +159,7 @@ def backtest_production_1x2(
         top_passes = (top_metric["edge"] >= min_edge and top_metric["ev"] >= min_ev and top_metric["odds"] > 1.0)
         if top_passes:
             n_top_prob_passes_gate += 1
-            group_top_passes.append({
+            group_top_prob_passes_gate.append({
                 "outcome": top_metric["outcome"],
                 "odds": top_metric["odds"]
             })
@@ -167,14 +170,29 @@ def backtest_production_1x2(
             skipped_no_value += 1
             continue
             
-        current_stake = compute_stake(stake, kelly_mult, best_bet["prob"], best_bet["odds"])
-        if current_stake <= 0:
-            skipped_no_value += 1
-            continue
+        if kelly_mult > 0:
+            if bankroll is None or bankroll <= 0:
+                skipped_no_value += 1
+                continue
+            kelly_f = compute_kelly_fraction(best_bet["prob"], best_bet["odds"])
+            current_stake = bankroll * kelly_mult * kelly_f
+            if current_stake <= 0:
+                skipped_no_value += 1
+                continue
+            if current_stake > bankroll:
+                current_stake = bankroll
+        else:
+            current_stake = compute_stake(stake, kelly_mult, best_bet["prob"], best_bet["odds"])
+            if current_stake <= 0:
+                skipped_no_value += 1
+                continue
             
         recommendation = best_bet["outcome"]
         is_win = (actual == CLASS_MAPPING[recommendation])
         profit = compute_profit(current_stake, best_bet["odds"], is_win)
+
+        if kelly_mult > 0 and bankroll is not None:
+            bankroll += profit
         
         bet_rows.append({
             "match_id": match_id,
@@ -190,8 +208,8 @@ def backtest_production_1x2(
             "selected_edge": best_bet["edge"],
             "selected_ev": best_bet["ev"],
             "is_win": int(is_win),
-            "stake": float(round(current_stake, 2)),
-            "profit": float(round(profit, 2)),
+            "stake": float(current_stake),
+            "profit": float(profit),
             # Compat fields
             "market": f"FT {recommendation.upper()}",
             "odds": best_bet["odds"],
@@ -205,42 +223,6 @@ def backtest_production_1x2(
         "kelly_mult": float(kelly_mult),
         "selection_mode": selection_mode
     }
-
-    if not bet_rows:
-        return {
-            "summary": {
-                "total_bets": 0,
-                "total_labeled_matches": total_labeled_matches,
-                "skipped_missing_pred": skipped_missing_pred,
-                "skipped_no_value": skipped_no_value,
-                "total_staked": 0.0,
-                "total_profit": 0.0,
-                "roi": 0.0,
-                "hit_rate": 0.0,
-                "avg_odds": 0.0,
-                "avg_edge": 0.0,
-                "avg_ev": 0.0,
-                "avg_selected_prob": 0.0,
-                "outcome_mix": {"home": 0.0, "draw": 0.0, "away": 0.0},
-                **summary_params
-            },
-            "markets": [], "league_stats_df": pd.DataFrame(), "daily_equity_df": pd.DataFrame(), "bets_df": pd.DataFrame()
-        }
-
-    bets_df = pd.DataFrame(bet_rows)
-    
-    # Aggregates
-    total_staked = bets_df["stake"].sum()
-    total_profit = bets_df["profit"].sum()
-    total_bets = len(bets_df)
-    roi = total_profit / total_staked if total_staked > 0 else 0.0
-    wins = bets_df["is_win"].sum()
-    hit_rate = wins / total_bets if total_bets > 0 else 0.0
-    
-    avg_odds = bets_df["selected_odds"].mean()
-    avg_edge = bets_df["selected_edge"].mean()
-    avg_ev = bets_df["selected_ev"].mean()
-    avg_prob = bets_df["selected_prob"].mean()
 
     # Summary construction with diagnostics
     def get_group_stats(rows: List[Dict[str, Any]], odds_key="odds", outcome_key="outcome"):
@@ -264,40 +246,83 @@ def backtest_production_1x2(
             }
         }
 
-    stats_all_valid = get_group_stats(group_all_valid)
-    stats_top_passes = get_group_stats(group_top_passes)
+    stats_all_valid = get_group_stats(group_top_prob_all_valid)
+    stats_top_passes = get_group_stats(group_top_prob_passes_gate)
     stats_placed = get_group_stats(bet_rows, odds_key="selected_odds", outcome_key="selected_outcome")
+
+    all_valid_definition = "prediction present + labeled outcome + valid odds"
+
+    if not bet_rows:
+        summary = {
+            "total_bets": 0,
+            "total_labeled_matches": total_labeled_matches,
+            "n_all_valid": stats_all_valid["count"],
+            "n_all_valid_matches": stats_all_valid["count"],
+            "n_any_passes_gate": n_any_passes_gate,
+            "n_top_prob_passes_gate": n_top_prob_passes_gate,
+            "skipped_missing_pred": skipped_missing_pred,
+            "skipped_invalid_odds": skipped_invalid_odds,
+            "skipped_no_value": skipped_no_value,
+            "total_staked": 0.0,
+            "total_profit": 0.0,
+            "roi": 0.0,
+            "hit_rate": 0.0,
+            "avg_odds": 0.0,
+            "avg_edge": 0.0,
+            "avg_ev": 0.0,
+            "avg_selected_prob": 0.0,
+            "stats_all_valid": stats_all_valid,
+            "stats_top_prob_all_valid": stats_all_valid,
+            "stats_top_passes_gate": stats_top_passes,
+            "stats_placed_bets": stats_placed,
+            "outcome_mix": stats_placed["mix"],
+            "all_valid_definition": all_valid_definition,
+            "effective_start_date": str(resolved_start.date()),
+            "effective_end_date": str(resolved_end.date()),
+            "max_drawdown": 0.0,
+            "max_drawdown_mode": "kelly" if kelly_mult > 0 else "flat",
+            "debug_info": debug_payload,
+            **summary_params
+        }
+        if kelly_mult > 0:
+            summary["bankroll_start"] = float(stake)
+            summary["bankroll_end"] = float(stake)
+
+        return {
+            "summary": summary,
+            "markets": [], "league_stats_df": pd.DataFrame(), "daily_equity_df": pd.DataFrame(), "bets_df": pd.DataFrame()
+        }
+
+    bets_df = pd.DataFrame(bet_rows)
+    
+    # Aggregates
+    total_staked = bets_df["stake"].sum()
+    total_profit = bets_df["profit"].sum()
+    total_bets = len(bets_df)
+    roi = total_profit / total_staked if total_staked > 0 else 0.0
+    wins = bets_df["is_win"].sum()
+    hit_rate = wins / total_bets if total_bets > 0 else 0.0
+    
+    avg_odds = bets_df["selected_odds"].mean()
+    avg_edge = bets_df["selected_edge"].mean()
+    avg_ev = bets_df["selected_ev"].mean()
+    avg_prob = bets_df["selected_prob"].mean()
 
     # Daily equity & MDD
     daily_equity_df = bets_df.groupby("date").agg(
         staked=("stake", "sum"),
         profit=("profit", "sum")
     ).reset_index().sort_values("date")
-    daily_equity_df["cum_profit"] = daily_equity_df["profit"].cumsum().round(2)
+    daily_equity_df["cum_profit"] = daily_equity_df["profit"].cumsum()
     
     if kelly_mult > 0:
-        # Bankroll evolution simulation (starting from 1.0)
-        bankroll = [1.0]
-        for _, row in bets_df.sort_values("date").iterrows():
-            # fractional kelly: bankroll *= (1 + kelly_fraction * (odds - 1) if win else 1 - kelly_fraction)
-            # here stake is already computed as stake_base * mult * kelly_f
-            # so pct_staked = stake / stake_base_implied (which we don't have exactly, 
-            # but we can assume bankroll starts at 'stake' or 1.0)
-            # Let's use a simpler bankroll = 1 + cum_profit / original_stake if we want unit-based
-            # or multiplicative if we assume stake is always % of current bankroll.
-            # Requirement: "Kelly (fractional), equity should be on a bankroll series (multiplicative)"
-            # we need to re-run the loop if we want true multiplicative, 
-            # but usually backtests use fixed initial bankroll.
-            pass
-        
-        # simplified bankroll for MDD in backtest context
-        # bankroll = 100 * prod(1 + profit_pct)
-        # But our stake is fixed relative to 'stake' param, not dynamic bankroll.
-        # So we treat it as units unless we implement dynamic bankroll in backtest.
-        # For now, use cumulative units for flat, and we'll calculate MDD on cumulative profit.
-        mdd = compute_max_drawdown(daily_equity_df["cum_profit"], mode="flat")
+        bankroll_start = float(stake)
+        daily_equity_df["bankroll"] = bankroll_start + daily_equity_df["profit"].cumsum()
+        mdd = compute_max_drawdown(daily_equity_df["bankroll"], mode="kelly")
+        max_dd_mode = "kelly"
     else:
         mdd = compute_max_drawdown(daily_equity_df["cum_profit"], mode="flat")
+        max_dd_mode = "flat"
 
     # League stats
     league_stats_df = bets_df.groupby("division").agg(
@@ -315,6 +340,7 @@ def backtest_production_1x2(
     summary = {
         "total_labeled_matches": total_labeled_matches,
         "n_all_valid": stats_all_valid["count"],
+        "n_all_valid_matches": stats_all_valid["count"],
         "n_any_passes_gate": n_any_passes_gate,
         "n_top_prob_passes_gate": n_top_prob_passes_gate,
         "total_bets": total_bets,
@@ -328,11 +354,14 @@ def backtest_production_1x2(
         "avg_selected_prob": float(round(avg_prob, 4)),
         
         "stats_all_valid": stats_all_valid,
+        "stats_top_prob_all_valid": stats_all_valid,
         "stats_top_passes_gate": stats_top_passes,
         "stats_placed_bets": stats_placed,
         
         "outcome_mix": stats_placed["mix"],  # Keep for backward compatibility
-        "max_drawdown": float(round(mdd, 2)),
+        "max_drawdown": float(round(mdd, 4)) if max_dd_mode == "kelly" else float(round(mdd, 2)),
+        "max_drawdown_mode": max_dd_mode,
+        "all_valid_definition": all_valid_definition,
         "effective_start_date": str(resolved_start.date()),
         "effective_end_date": str(resolved_end.date()),
         "skipped_missing_pred": skipped_missing_pred,
@@ -341,6 +370,10 @@ def backtest_production_1x2(
         "debug_info": debug_payload,
         **summary_params
     }
+
+    if kelly_mult > 0:
+        summary["bankroll_start"] = float(stake)
+        summary["bankroll_end"] = float(daily_equity_df["bankroll"].iloc[-1]) if not daily_equity_df.empty else float(stake)
     
     if ci_res["status"] == "success":
         summary.update({

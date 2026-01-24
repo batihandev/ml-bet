@@ -73,7 +73,18 @@ async def backtest_sweep_api(body: SweepRequest):
     await progress_manager.broadcast({"type": "sweep_started", "payload": params})
     try:
         from functools import partial
-        result = await anyio.to_thread.run_sync(partial(run_backtest_sweep, **params))
+        def progress_cb(info: Dict[str, Any]):
+            try:
+                anyio.from_thread.run(
+                    progress_manager.broadcast,
+                    {"type": "sweep_progress", "payload": info}
+                )
+            except Exception:
+                pass
+
+        result = await anyio.to_thread.run_sync(
+            partial(run_backtest_sweep, progress_callback=progress_cb, **params)
+        )
         await progress_manager.broadcast({"type": "sweep_completed", "payload": {"cells_count": len(result.get("cells", []))}})
         return result
     except Exception as exc:

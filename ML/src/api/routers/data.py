@@ -63,10 +63,26 @@ async def unzip_raw_api(background_tasks: BackgroundTasks):
 
 @router.post("/build-dataset")
 async def build_dataset_api(background_tasks: BackgroundTasks):
-    background_tasks.add_task(lambda: anyio.to_thread.run_sync(run_build_dataset_process))
+    async def _run_build_dataset():
+        await progress_manager.broadcast({"type": "dataset_build_started", "payload": {}})
+        try:
+            await anyio.to_thread.run_sync(run_build_dataset_process)
+            await progress_manager.broadcast({"type": "dataset_build_completed", "payload": {}})
+        except Exception as exc:
+            await progress_manager.broadcast({"type": "dataset_build_failed", "payload": {"error": str(exc)}})
+
+    background_tasks.add_task(_run_build_dataset)
     return {"status": "dataset_build_dispatched"}
 
 @router.post("/build-features")
 async def build_features_api(background_tasks: BackgroundTasks):
-    background_tasks.add_task(lambda: anyio.to_thread.run_sync(run_build_features_process))
+    async def _run_build_features():
+        await progress_manager.broadcast({"type": "features_build_started", "payload": {}})
+        try:
+            await anyio.to_thread.run_sync(run_build_features_process)
+            await progress_manager.broadcast({"type": "features_build_completed", "payload": {}})
+        except Exception as exc:
+            await progress_manager.broadcast({"type": "features_build_failed", "payload": {"error": str(exc)}})
+
+    background_tasks.add_task(_run_build_features)
     return {"status": "features_build_dispatched"}

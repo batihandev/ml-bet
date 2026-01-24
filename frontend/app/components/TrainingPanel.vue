@@ -3,7 +3,7 @@ import { reactive, ref, computed } from 'vue'
 
 const form = reactive({
   trainStart: '2020-06-30',
-  trainingCutoffDate: '2025-06-30',
+  trainingCutoffDate: '2024-12-29',
   oofCalibration: true,
   calibrationMethod: 'none',
   oofStep: '1 month',
