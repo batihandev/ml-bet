@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 from .schema import CLASS_MAPPING, Outcome, MIN_EDGE, MIN_EV
 from features import build_features
+from .utils_market import is_valid_odds, calculate_implied_probs
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 PROCESSED_DIR = ROOT_DIR / "data" / "processed"
@@ -47,15 +48,6 @@ def load_production_model():
     bundle = joblib.load(model_path)
     return bundle.get("base_model"), bundle.get("calibrator"), bundle["features"]
 
-def calculate_implied_probs(odd_home, odd_draw, odd_away):
-    """Calculate normalized implied probabilities from bookmaker odds."""
-    if not all([odd_home, odd_draw, odd_away]):
-        return None, None, None
-    
-    raw_probs = [1.0/odd_home, 1.0/odd_draw, 1.0/odd_away]
-    margin = sum(raw_probs)
-    return [p / margin for p in raw_probs]
-
 def predict_ft_1x2(df_features: pd.DataFrame) -> List[Dict[str, Any]]:
     """Perform production inference on a dataframe of features."""
     base_model, calibrator, features = load_production_model()
@@ -87,46 +79,46 @@ def predict_ft_1x2(df_features: pd.DataFrame) -> List[Dict[str, Any]]:
         row = df_features.iloc[i]
         p_home, p_draw, p_away = probs[i]
         
-        odd_home = float(row.get("odd_home", 0)) if not pd.isna(row.get("odd_home")) else 0
-        odd_draw = float(row.get("odd_draw", 0)) if not pd.isna(row.get("odd_draw")) else 0
-        odd_away = float(row.get("odd_away", 0)) if not pd.isna(row.get("odd_away")) else 0
+        odd_home = row.get("odd_home")
+        odd_draw = row.get("odd_draw")
+        odd_away = row.get("odd_away")
         
-        pimp_home, pimp_draw, pimp_away = calculate_implied_probs(odd_home, odd_draw, odd_away)
+        # Centralized check: returns tuple or None
+        implied = calculate_implied_probs(odd_home, odd_draw, odd_away)
         
         metrics = []
-        if pimp_home is not None:
+        if implied is not None:
+            pimp_home, pimp_draw, pimp_away = implied
+            
+            # Recast as float for safety
+            oh = float(odd_home)
+            od = float(odd_draw)
+            oa = float(odd_away)
+            
             metrics.append({
                 "outcome": "home",
                 "prob": float(p_home),
                 "pimp": float(pimp_home),
                 "edge": float(p_home - pimp_home),
-                "ev": float(p_home * odd_home - 1),
-                "odds": float(odd_home)
+                "ev": float(p_home * oh - 1),
+                "odds": oh
             })
             metrics.append({
                 "outcome": "draw",
                 "prob": float(p_draw),
                 "pimp": float(pimp_draw),
                 "edge": float(p_draw - pimp_draw),
-                "ev": float(p_draw * odd_draw - 1),
-                "odds": float(odd_draw)
+                "ev": float(p_draw * od - 1),
+                "odds": od
             })
             metrics.append({
                 "outcome": "away",
                 "prob": float(p_away),
                 "pimp": float(pimp_away),
                 "edge": float(p_away - pimp_away),
-                "ev": float(p_away * odd_away - 1),
-                "odds": float(odd_away)
+                "ev": float(p_away * oa - 1),
+                "odds": oa
             })
-        
-        recommendation = "no bet"
-        best_ev = -999.0
-        if metrics:
-            best_choice = max(metrics, key=lambda x: x["ev"])
-            if best_choice["ev"] >= MIN_EV and best_choice["edge"] >= MIN_EDGE:
-                recommendation = best_choice["outcome"]
-                best_ev = best_choice["ev"]
         
         results.append({
             "match_id": int(row["match_id"]),
@@ -136,18 +128,20 @@ def predict_ft_1x2(df_features: pd.DataFrame) -> List[Dict[str, Any]]:
                 "away": float(p_away)
             },
             "implied_probabilities": {
-                "home": float(pimp_home) if pimp_home else None,
-                "draw": float(pimp_draw) if pimp_draw else None,
-                "away": float(pimp_away) if pimp_away else None
+                "home": float(implied[0]) if implied else None,
+                "draw": float(implied[1]) if implied else None,
+                "away": float(implied[2]) if implied else None
             },
-            "recommendation": recommendation,
-            "best_ev": float(best_ev) if recommendation != "no bet" else None,
             "metrics": metrics
         })
         
     return results
 
-def predict_live_with_history(payload: Dict[str, Any]) -> Dict[str, Any]:
+def predict_live_with_history(
+    payload: Dict[str, Any], 
+    min_edge: float = MIN_EDGE, 
+    min_ev: float = MIN_EV
+) -> Dict[str, Any]:
     """Single-model production live prediction."""
     row = build_feature_row_for_live_match(payload)
     df_row = row.to_frame().T
@@ -160,17 +154,30 @@ def predict_live_with_history(payload: Dict[str, Any]) -> Dict[str, Any]:
         "division": row.get("division"),
         "match_date": row.get("match_date").date().isoformat() if isinstance(row.get("match_date"), pd.Timestamp) else None,
         "home_team": row.get("home_team"), "away_team": row.get("away_team"),
-        "odd_home": float(row.get("odd_home")) if not pd.isna(row.get("odd_home")) else None,
-        "odd_draw": float(row.get("odd_draw")) if not pd.isna(row.get("odd_draw")) else None,
-        "odd_away": float(row.get("odd_away")) if not pd.isna(row.get("odd_away")) else None,
+        "odd_home": float(row.get("odd_home")) if is_valid_odds(row.get("odd_home")) else None,
+        "odd_draw": float(row.get("odd_draw")) if is_valid_odds(row.get("odd_draw")) else None,
+        "odd_away": float(row.get("odd_away")) if is_valid_odds(row.get("odd_away")) else None,
     }
     
     res = results[0]
+    
+    # Apply default decision logic for live/UI usage
+    recommendation = "no bet"
+    best_ev = -999.0
+    metrics = res["metrics"]
+    
+    if metrics:
+        best_choice = max(metrics, key=lambda x: x["ev"])
+        # Gate with both thresholds
+        if best_choice["ev"] >= min_ev and best_choice["edge"] >= min_edge:
+            recommendation = best_choice["outcome"]
+            best_ev = best_choice["ev"]
+            
     return {
         "match": match_info,
         "probabilities": res["probabilities"],
         "implied_probabilities": res["implied_probabilities"],
-        "recommendation": res["recommendation"],
-        "best_ev": res["best_ev"],
-        "metrics": res["metrics"]
+        "recommendation": recommendation,
+        "best_ev": float(best_ev) if recommendation != "no bet" else None,
+        "metrics": metrics
     }

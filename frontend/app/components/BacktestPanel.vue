@@ -8,6 +8,7 @@ const form = reactive({
   startDate: '2024-12-30',
   endDate: '2025-06-30',
   minEdge: 0.05,
+  minEv: 0.0,
   stake: 1,
   kellyMult: 0
 })
@@ -188,6 +189,7 @@ async function runBacktest() {
         start_date: form.startDate || null,
         end_date: form.endDate || null,
         min_edge: form.minEdge,
+        min_ev: form.minEv,
         stake: form.stake,
         kelly_mult: form.kellyMult
       }
@@ -240,6 +242,21 @@ async function runBacktest() {
                 step="0.01"
                 min="0"
                 max="0.5"
+                placeholder="0.05"
+              />
+            </UFormField>
+
+            <UFormField
+              label="Min EV"
+              help="Expected value threshold. 0 = +EV only."
+            >
+              <UInput
+                v-model.number="form.minEv"
+                type="number"
+                step="0.01"
+                min="-0.5"
+                max="0.5"
+                placeholder="0.0"
               />
             </UFormField>
 

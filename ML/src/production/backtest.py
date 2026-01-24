@@ -3,9 +3,11 @@ import numpy as np
 from pathlib import Path
 import json
 from typing import Optional, Dict, Any, List
-from .predict import predict_ft_1x2
-from .schema import CLASS_MAPPING, TARGET_COL
-from dataset.cleaner import load_features
+# Fix schema.py to remove TARGET_COL if it's not needed or ensure it's imported correctly
+from .schema import CLASS_MAPPING 
+from dataset.cleaner import load_features 
+from .utils_market import is_valid_odds
+from .predict import predict_ft_1x2 # Relative import works if run as module
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
@@ -13,6 +15,7 @@ def backtest_production_1x2(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     min_edge: float = 0.05,
+    min_ev: float = 0.0,
     stake: float = 1.0,
     kelly_mult: float = 0.0,
 ) -> Dict[str, Any]:
@@ -22,46 +25,93 @@ def backtest_production_1x2(
     # Check model meta for training cutoff
     meta_path = ROOT_DIR / "models" / "model_ft_1x2_meta.json"
     training_cutoff = None
-    data_end = pd.to_datetime("2025-06-30")
+    data_end = None
     
     if meta_path.exists():
         with open(meta_path, "r") as f:
             meta = json.load(f)
-            cutoff_str = meta.get("training_params", {}).get("training_cutoff_date")
+            # 5. Canonical meta field for cutoff
+            cutoff_str = meta.get("windows", {}).get("training_cutoff_date")
+            if not cutoff_str:
+                cutoff_str = meta.get("training_params", {}).get("training_cutoff_date")
+            
             if cutoff_str:
                 training_cutoff = pd.to_datetime(cutoff_str)
+            
+            # 4. Remove hardcoded data_end
+            data_end_str = meta.get("windows", {}).get("data_end")
+            if data_end_str:
+                data_end = pd.to_datetime(data_end_str)
     
-    if training_cutoff and training_cutoff >= data_end:
-        return {
-            "summary": {"total_bets": 0, "status": "Not available (no labeled data after cutoff)"},
-            "markets": [],
-            "league_stats_df": pd.DataFrame(),
-            "daily_equity_df": pd.DataFrame(),
-            "bets_df": pd.DataFrame()
-        }
-
+    # Load all data
     df_all = load_features()
     
-    # Resolve and clamp start_date
-    resolved_start = pd.to_datetime(start_date) if start_date else df_all["match_date"].min()
+    # 4. Fallback data_end from data
+    if data_end is None and not df_all.empty:
+        data_end = df_all["match_date"].max()
+    
+    # Capture available data range for clamping
+    data_min = pd.to_datetime(df_all["match_date"].min())
+    data_max = pd.to_datetime(df_all["match_date"].max())
+
+    # Early exit if cutoff is in future of data/logic invalid
+    if training_cutoff and data_end and training_cutoff >= data_end:
+        return {
+            "summary": {"total_bets": 0, "status": "Not available (no labeled data after cutoff)"},
+            "markets": [], "league_stats_df": pd.DataFrame(), "daily_equity_df": pd.DataFrame(), "bets_df": pd.DataFrame()
+        }
+
+    # 3. Date Resolution
+    resolved_start = pd.to_datetime(start_date) if start_date else data_min
+    
     if training_cutoff:
         min_allowed = training_cutoff + pd.Timedelta(days=1)
         if resolved_start < min_allowed:
             print(f"Clamping backtest start from {resolved_start.date()} to {min_allowed.date()} (Training cutoff + 1 day)")
             resolved_start = min_allowed
+            
+    resolved_end = pd.to_datetime(end_date) if end_date else data_max
     
-    df_all = df_all[df_all["match_date"] >= resolved_start]
-    if end_date:
-        df_all = df_all[df_all["match_date"] <= pd.to_datetime(end_date)]
+    # Clamp to actual data availability
+    resolved_start = max(resolved_start, data_min)
+    resolved_end = min(resolved_end, data_max)
+    
+    # Filter by date
+    df_window = df_all[
+        (df_all["match_date"] >= resolved_start) & 
+        (df_all["match_date"] <= resolved_end)
+    ].copy()
 
-    if df_all.empty:
+    total_matches_in_window = len(df_window)
+
+    if df_window.empty:
         return {
-            "summary": {"total_bets": 0},
-            "markets": [],
-            "league_stats_df": pd.DataFrame(),
-            "daily_equity_df": pd.DataFrame(),
-            "bets_df": pd.DataFrame()
+            "summary": {"total_bets": 0, "status": "No matches in window"},
+            "markets": [], "league_stats_df": pd.DataFrame(), "daily_equity_df": pd.DataFrame(), "bets_df": pd.DataFrame()
         }
+
+    # 2. Filter to labeled rows before predicting
+    # We only care about rows we can evaluate (labeled)
+    df_bt = df_window[
+        df_window["ft_home_goals"].notna() & 
+        df_window["ft_away_goals"].notna()
+    ].copy()
+    
+    total_labeled_matches = len(df_bt)
+    skipped_unlabeled = total_matches_in_window - total_labeled_matches
+
+    if df_bt.empty:
+         return {
+            "summary": {"total_bets": 0, "skipped_unlabeled": skipped_unlabeled},
+            "markets": [], "league_stats_df": pd.DataFrame(), "daily_equity_df": pd.DataFrame(), "bets_df": pd.DataFrame()
+        }
+
+    # 1. Normalize match_id to ensure consistent types
+    df_bt["match_id"] = df_bt["match_id"].astype("int64")
+
+    # 3. Guard against duplicate match_id
+    if df_bt["match_id"].duplicated().any():
+        raise ValueError("Duplicate match_id in backtest window")
 
     # Prepare actual outcomes for evaluation
     def get_actual_outcome(row):
@@ -73,26 +123,61 @@ def backtest_production_1x2(
         if h < a: return CLASS_MAPPING["away"]
         return CLASS_MAPPING["draw"]
 
-    # Generate predictions
-    predictions = predict_ft_1x2(df_all)
+    # Generate predictions on filtered set
+    predictions = predict_ft_1x2(df_bt)
+    
+    # 8. Sanity check prediction count
+    if len(predictions) != len(df_bt):
+        print(f"Warning: predictions={len(predictions)} != rows={len(df_bt)}")
+    
+    # 4. Make pred_by_id robust
+    pred_by_id = {}
+    for r in predictions:
+        mid = int(r["match_id"])
+        if mid in pred_by_id:
+            raise ValueError(f"Duplicate prediction for match_id={mid}")
+        pred_by_id[mid] = r
     
     bet_rows = []
     
-    for i, res in enumerate(predictions):
-        match_row = df_all.iloc[i]
+    # Counters
+    skipped_missing_pred = 0
+    skipped_invalid_odds = 0
+    skipped_no_value = 0
+    
+    for idx, match_row in df_bt.iterrows():
+        match_id = int(match_row["match_id"])
+        
+        # Alignment check
+        if match_id not in pred_by_id:
+            skipped_missing_pred += 1
+            continue
+            
+        pred_res = pred_by_id[match_id]
+        metrics = pred_res.get("metrics", [])
+        
+        # 5. Simplify odds validity logic
+        # Treat empty metrics as invalid odds (predict.py centralizes this check)
+        if not metrics:
+            skipped_invalid_odds += 1
+            continue
+            
+        # Optional double-check if desired, but metrics-gating handles it cleaner
+        # We rely on predict() setting metrics=[] when odds are invalid.
+            
         actual = get_actual_outcome(match_row)
         if actual is None:
             continue
             
-        # We look at all 3 outcomes to see if any meet the min_edge
-        # In experimental, it was separate models. Here it's 1X2.
-        # We pick the outcome with the highest EV that meets min_edge.
+        # 9. Bet Decision Logic (Centralized here)
+        # 7. Enforce EV threshold in betting filter
         valid_bets = [
-            m for m in res["metrics"] 
-            if m["edge"] >= min_edge and m["odds"] > 1.0
+            m for m in metrics 
+            if m["edge"] >= min_edge and m["ev"] >= min_ev and m["odds"] > 1.0
         ]
         
         if not valid_bets:
+            skipped_no_value += 1
             continue
             
         # Pick best value
@@ -101,17 +186,15 @@ def backtest_production_1x2(
         prob = best_bet["prob"]
         odds = best_bet["odds"]
         
-        # Determine stake
+        # 6. Fix Kelly stake sizing
         if kelly_mult > 0:
             kelly_f = (prob * odds - 1.0) / (odds - 1.0)
             if kelly_f <= 0:
+                skipped_no_value += 1
                 continue
-            # Align with experimental: stake * kelly_mult * f_kelly
-            # But experimental doesn't usually use a '100 units' base bankroll.
-            # However, for UI clarity, we'll stick to 'units' where stake is a bankroll multiplier.
-            # If user sets stake=100 and mult=0.25, bet is 25% of 100 * kelly_f.
-            # If user sets stake=1.0 and mult=0.25, let's assume stake means bankroll.
-            current_stake = stake * kelly_mult * kelly_f * 100
+            
+            # Pure kelly stake
+            current_stake = stake * kelly_mult * kelly_f
         else:
             current_stake = stake
             
@@ -135,9 +218,26 @@ def backtest_production_1x2(
             "profit": float(round(profit, 2))
         })
 
+    # 6. Include all decision params in summary
+    summary_params = {
+        "min_edge": float(min_edge),
+        "min_ev": float(min_ev),
+        "stake": float(stake),
+        "kelly_mult": float(kelly_mult)
+    }
+
     if not bet_rows:
         return {
-            "summary": {"total_bets": 0},
+            "summary": {
+                "total_bets": 0,
+                "total_matches_in_window": total_matches_in_window,
+                "total_labeled_matches": total_labeled_matches,
+                "skipped_unlabeled": skipped_unlabeled,
+                "skipped_missing_pred": skipped_missing_pred,
+                "skipped_invalid_odds": skipped_invalid_odds,
+                "skipped_no_value": skipped_no_value,
+                **summary_params
+            },
             "markets": [],
             "league_stats_df": pd.DataFrame(),
             "daily_equity_df": pd.DataFrame(),
@@ -188,14 +288,22 @@ def backtest_production_1x2(
 
     return {
         "summary": {
-            "total_matches": len(df_all),
+            "total_matches_in_window": total_matches_in_window,
+            "total_labeled_matches": total_labeled_matches,
             "total_bets": total_bets,
             "total_staked": float(round(total_staked, 2)),
             "total_profit": float(round(total_profit, 2)),
             "roi": float(round(roi, 4)),
             "hit_rate": float(round(hit_rate, 4)),
-            "start_date": str(start_date),
-            "end_date": str(end_date)
+            "requested_start_date": str(start_date),
+            "requested_end_date": str(end_date),
+            "effective_start_date": str(resolved_start.date()),
+            "effective_end_date": str(resolved_end.date()),
+            "skipped_unlabeled": skipped_unlabeled,
+            "skipped_missing_pred": skipped_missing_pred,
+            "skipped_invalid_odds": skipped_invalid_odds,
+            "skipped_no_value": skipped_no_value,
+            **summary_params
         },
         "markets": markets_summary,
         "league_stats_df": league_stats_df,

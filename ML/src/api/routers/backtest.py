@@ -11,6 +11,7 @@ class BacktestRequest(BaseModel):
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     min_edge: float = 0.02
+    min_ev: float = 0.0
     stake: float = 1.0
     kelly_mult: float = 0.0
 
@@ -19,6 +20,7 @@ def run_backtest_json(params: Dict[str, Any]) -> Dict[str, Any]:
         start_date=params.get("start_date"),
         end_date=params.get("end_date"),
         min_edge=float(params.get("min_edge", 0.02)),
+        min_ev=float(params.get("min_ev", 0.0)),
         stake=float(params.get("stake", 1.0)),
         kelly_mult=float(params.get("kelly_mult", 0.0)),
     )

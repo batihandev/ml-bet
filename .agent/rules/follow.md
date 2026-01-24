@@ -1,3 +1,7 @@
+---
+trigger: always_on
+---
+
 # Engineering Standard: Logic Consolidation & Maintainability
 
 ## Objective
@@ -37,6 +41,14 @@ Reduce redundancy and improve maintainability by ensuring every piece of logic h
 - **Single Source of Truth:** Business logic must exist in exactly one place.
 - **Incremental Changes:** Changes must be local and incremental rather than sweeping architectural shifts.
 - **Naming Consistency:** Naming must remain consistent with the existing codebase patterns.
+
+## Python Execution Rules
+
+1. **Always use the virtual environment**: Execute python using [.venv/bin/python](cci:7://file:///home/batih/personal/football-bet/.venv/bin/python:0:0-0:0).
+2. **Set PYTHONPATH**: Always prepend `PYTHONPATH=ML/src` to resolve imports correctly (e.g., `from production...`).
+3. **Command Pattern**:
+   - Run scripts: `PYTHONPATH=ML/src .venv/bin/python path/to/script.py`
+   - Run tests: `PYTHONPATH=ML/src .venv/bin/python -m unittest path/to/test.py`
 
 ## Evaluation Checklist (Self-Review)
 
