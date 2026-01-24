@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from prediction import predict_live_with_history
+from production.predict import predict_live_with_history
 
 router = APIRouter(prefix="/predict", tags=["prediction"])
 

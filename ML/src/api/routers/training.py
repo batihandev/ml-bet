@@ -4,8 +4,8 @@ from typing import Optional
 import anyio
 import json
 from pathlib import Path
-from training import run_training_process
-from training.engine import MODELS_DIR
+from production.train import train_production_model as run_training_process
+from production.train import MODELS_DIR
 from ..ws_progress import progress_manager
 
 router = APIRouter(prefix="/train", tags=["training"])
@@ -69,7 +69,7 @@ async def get_feature_importance(model_name: str):
         meta = await anyio.to_thread.run_sync(read_meta)
         return {
             "model_name": model_name,
-            "feature_importance": meta.get("feature_importance", [])
+            **meta
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))

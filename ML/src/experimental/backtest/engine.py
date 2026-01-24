@@ -7,7 +7,7 @@ import pandas as pd
 import warnings
 
 from config.allowed_divisions import ALLOWED_DIVISIONS
-from prediction.engine import load_features, load_model, build_X
+from ..prediction.engine import load_features, load_model, build_X
 
 # Suppress warnings
 warnings.filterwarnings(
@@ -19,7 +19,7 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
+ROOT_DIR = Path(__file__).resolve().parents[3]
 
 def load_all_dates(df_all: pd.DataFrame) -> list[date]:
     return sorted(df_all["match_date"].dt.date.unique())

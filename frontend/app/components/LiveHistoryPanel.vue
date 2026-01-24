@@ -47,30 +47,78 @@ type MatchInfo = {
   odd_away: number | null
 }
 
-type ProbRow = {
-  key: string
-  label: string
+type PredictionMetric = {
+  outcome: string
   prob: number
+  pimp: number
+  edge: number
+  ev: number
+  odds: number
+}
+
+type PredictionResult = {
+  match: MatchInfo
+  probabilities: Record<string, number>
+  implied_probabilities: Record<string, number>
+  recommendation: string
+  best_ev: number | null
+  metrics: PredictionMetric[]
 }
 
 const matchInfo = ref<MatchInfo | null>(null)
-const htftRows = ref<ProbRow[]>([])
-const ftRows = ref<ProbRow[]>([])
+const recommendation = ref<string>('no bet')
+const bestEv = ref<number | null>(null)
+const metrics = ref<PredictionMetric[]>([])
 
-const probColumns: TableColumn<ProbRow>[] = [
-  { accessorKey: 'label', header: 'Outcome' },
+const metricColumns: TableColumn<PredictionMetric>[] = [
+  { accessorKey: 'outcome', header: 'Outcome' },
+  {
+    accessorKey: 'odds',
+    header: 'Odds',
+    cell: ({ row }) => (row.getValue('odds') as number).toFixed(2)
+  },
   {
     accessorKey: 'prob',
-    header: 'Model prob',
+    header: 'Model Prob',
     cell: ({ row }) => {
       const v = row.getValue('prob') as number
+      return `${(v * 100).toFixed(1)}%`
+    }
+  },
+  {
+    accessorKey: 'pimp',
+    header: 'Fair Prob',
+    cell: ({ row }) => {
+      const v = row.getValue('pimp') as number
+      return v ? `${(v * 100).toFixed(1)}%` : '-'
+    }
+  },
+  {
+    accessorKey: 'edge',
+    header: 'Edge',
+    cell: ({ row }) => {
+      const v = row.getValue('edge') as number
       const cls =
-        v >= 0.45
-          ? 'font-semibold text-emerald-500'
-          : v <= 0.2
-          ? 'text-muted'
-          : ''
+        v > 0.05
+          ? 'text-emerald-500 font-semibold'
+          : v < 0
+            ? 'text-rose-500'
+            : ''
       return h('span', { class: cls }, `${(v * 100).toFixed(1)}%`)
+    }
+  },
+  {
+    accessorKey: 'ev',
+    header: 'EV',
+    cell: ({ row }) => {
+      const v = row.getValue('ev') as number
+      const cls =
+        v > 0.1
+          ? 'text-emerald-500 font-semibold'
+          : v < 0
+            ? 'text-rose-500'
+            : ''
+      return h('span', { class: cls }, `${(v * 100).toFixed(1)}`)
     }
   }
 ]
@@ -79,36 +127,36 @@ async function runLivePrediction() {
   const toast = useToast()
   loading.value = true
   matchInfo.value = null
-  htftRows.value = []
-  ftRows.value = []
+  recommendation.value = 'no bet'
+  bestEv.value = null
+  metrics.value = []
 
   try {
-    const res = await $fetch<{
-      match: MatchInfo
-      htft: ProbRow[]
-      ft_1x2: ProbRow[]
-    }>(`${config.public.apiBase}/predict/live-with-history`, {
-      method: 'POST',
-      body: {
-        division: form.division.trim(),
-        match_date: form.matchDate,
-        home_team: form.homeTeam.trim(),
-        away_team: form.awayTeam.trim(),
-        odd_home: form.oddHome,
-        odd_draw: form.oddDraw,
-        odd_away: form.oddAway
+    const res = await $fetch<PredictionResult>(
+      `${config.public.apiBase}/predict/live-with-history`,
+      {
+        method: 'POST',
+        body: {
+          division: form.division.trim(),
+          match_date: form.matchDate,
+          home_team: form.homeTeam.trim(),
+          away_team: form.awayTeam.trim(),
+          odd_home: form.oddHome,
+          odd_draw: form.oddDraw,
+          odd_away: form.oddAway
+        }
       }
-    })
+    )
 
     matchInfo.value = res.match
-    htftRows.value = res.htft ?? []
-    ftRows.value = res.ft_1x2 ?? []
+    recommendation.value = res.recommendation
+    bestEv.value = res.best_ev
+    metrics.value = res.metrics ?? []
 
     toast.add({
-      title: 'Live prediction ready',
-      description:
-        'Built features using historical form & H2H and ran all models.',
-      color: 'success'
+      title: 'Prediction ready',
+      description: `Recommendation: ${res.recommendation.toUpperCase()}`,
+      color: res.recommendation !== 'no bet' ? 'success' : 'primary'
     })
   } catch (err: any) {
     console.error('Live-with-history predict error', err)
@@ -238,15 +286,43 @@ async function runLivePrediction() {
           </div>
         </UCard>
 
-        <div class="grid gap-4 md:grid-cols-2">
-          <UCard>
-            <h3 class="mb-3 text-sm font-semibold">HT/FT patterns</h3>
-            <UTable :data="htftRows" :columns="probColumns" />
+        <div class="grid gap-4 md:grid-cols-1">
+          <UCard
+            v-if="recommendation !== 'no bet'"
+            class="border-2 border-emerald-500/50 bg-emerald-500/5"
+          >
+            <div class="flex items-center justify-between">
+              <div>
+                <p
+                  class="text-xs font-medium text-emerald-600 dark:text-emerald-400"
+                >
+                  Production Recommendation
+                </p>
+                <p
+                  class="mt-1 text-2xl font-bold text-emerald-700 dark:text-emerald-300"
+                >
+                  BET ON: {{ recommendation.toUpperCase() }}
+                </p>
+              </div>
+              <div class="text-right">
+                <p class="text-xs font-medium text-muted">Estimated EV</p>
+                <p class="text-xl font-bold">{{ bestEv?.toFixed(2) }}</p>
+              </div>
+            </div>
+          </UCard>
+
+          <UCard v-else class="border-2 border-slate-500/30 bg-slate-500/5">
+            <div class="text-center py-2">
+              <p class="text-sm font-medium text-muted">No Recommendation</p>
+              <p class="text-xs text-muted/70">
+                Metrics do not meet production thresholds
+              </p>
+            </div>
           </UCard>
 
           <UCard>
-            <h3 class="mb-3 text-sm font-semibold">FT 1X2</h3>
-            <UTable :data="ftRows" :columns="probColumns" />
+            <h3 class="mb-3 text-sm font-semibold">1X2 Model Metrics</h3>
+            <UTable :data="metrics" :columns="metricColumns" />
           </UCard>
         </div>
       </div>

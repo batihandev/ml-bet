@@ -2,7 +2,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional, Any, Dict
 import anyio
-from backtest.engine import backtest_ft_1x2_core
+from production.backtest import backtest_production_1x2 as backtest_ft_1x2_core
 from ..ws_progress import progress_manager
 
 router = APIRouter(prefix="/backtest", tags=["backtest"])

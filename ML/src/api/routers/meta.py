@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 import anyio
-from training.data import load_features
+from dataset.cleaner import load_features
 
 router = APIRouter(prefix="/meta", tags=["metadata"])
 

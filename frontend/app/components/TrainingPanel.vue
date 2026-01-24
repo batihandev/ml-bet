@@ -2,21 +2,48 @@
 import { reactive, ref, computed } from 'vue'
 
 const form = reactive({
-  trainStart: '2020-01-01',
+  trainStart: '2020-06-30',
   trainEnd: '2025-06-30',
-  cutoffDate: '2024-07-01',
+  cutoffDate: '2024-12-30',
   nEstimators: 300,
   maxDepth: 8,
   minSamplesLeaf: 50
 })
 
+const trainingPresets = [
+  {
+    label: 'Last 5 Years',
+    start: '2020-06-30',
+    end: '2025-06-30',
+    val: '2024-12-30'
+  },
+  {
+    label: 'Last 10 Years',
+    start: '2015-06-30',
+    end: '2025-06-30',
+    val: '2024-06-30'
+  },
+  {
+    label: 'Start to End',
+    start: '2000-01-01',
+    end: '2025-06-30',
+    val: '2023-06-30'
+  }
+]
+
+function applyTrainingPreset(p: any) {
+  form.trainStart = p.start
+  form.trainEnd = p.end
+  form.cutoffDate = p.val
+}
+
 const loading = ref(false)
 const statusMessage = ref<string | null>(null)
 
-const importanceData = ref([])
+const modelMeta = ref<any>(null)
 const importanceLoading = ref(false)
 const availableModels = ref<string[]>([])
-const selectedModel = ref('model_ft_home_win')
+const selectedModel = ref('model_ft_1x2')
 
 // Compute the day before cutoff for display
 const lastTrainDate = computed(() => {
@@ -44,13 +71,11 @@ async function runTraining() {
       }
     })
 
-    statusMessage.value =
-      'Training job dispatched. Watch for status in the banner/toast.'
-    // Small delay to allow backend to potentially finish (though it's background)
-    // In a real scenario, we'd wait for the WS event.
-    // For now, let's just provide a way to refresh it or fetch current.
-    fetchImportance(selectedModel.value)
-    fetchAvailableModels()
+    statusMessage.value = 'Training job dispatched.'
+    setTimeout(() => {
+      fetchImportance(selectedModel.value)
+      fetchAvailableModels()
+    }, 2000)
   } catch (e: any) {
     statusMessage.value = e?.data?.detail || 'Training failed to dispatch.'
   } finally {
@@ -78,13 +103,13 @@ async function fetchImportance(modelName: string) {
   const config = useRuntimeConfig()
   importanceLoading.value = true
   try {
-    const res = await $fetch<{ feature_importance: any[] }>(
+    const res = await $fetch<any>(
       `${config.public.apiBase}/train/feature-importance/${modelName}`
     )
-    importanceData.value = res.feature_importance as any
+    modelMeta.value = res
   } catch (e) {
-    console.error('Failed to fetch importance:', e)
-    importanceData.value = []
+    console.error('Failed to fetch meta:', e)
+    modelMeta.value = null
   } finally {
     importanceLoading.value = false
   }
@@ -188,10 +213,18 @@ onMounted(() => {
             </div>
           </div>
 
-          <div class="flex items-center justify-between gap-4">
-            <p class="text-xs text-muted">
-              Leave fields empty to let the backend pick defaults.
-            </p>
+          <div class="flex flex-wrap items-center justify-between gap-4">
+            <div class="flex gap-2">
+              <UButton
+                v-for="p in trainingPresets"
+                :key="p.label"
+                size="xs"
+                variant="soft"
+                @click="applyTrainingPreset(p)"
+              >
+                {{ p.label }}
+              </UButton>
+            </div>
 
             <UButton
               color="primary"
@@ -209,38 +242,104 @@ onMounted(() => {
         </UForm>
       </UCard>
 
-      <!-- Right: explainer -->
-      <UCard class="space-y-3">
-        <h3 class="text-sm font-semibold">How splitting works</h3>
-        <p class="text-xs text-muted">
-          The code in
-          <code class="font-mono text-[11px]">train_model.py</code> does:
-        </p>
-        <pre
-          class="text-[11px] bg-gray-100 dark:bg-gray-800 p-2 rounded overflow-x-auto font-mono"
-        >
+      <!-- Right: explainer/metrics -->
+      <div class="space-y-6">
+        <UCard v-if="modelMeta?.metrics" class="space-y-3">
+          <template #header>
+            <div class="flex items-center justify-between">
+              <h3 class="text-md font-semibold">Trained Data Metrics</h3>
+              <div class="flex items-center gap-2">
+                <UBadge color="success" variant="subtle" size="md">
+                  Acc: {{ (modelMeta.metrics.accuracy * 100).toFixed(1) }}%
+                </UBadge>
+                <UButton
+                  variant="ghost"
+                  icon="i-lucide-refresh-cw"
+                  size="xs"
+                  :loading="importanceLoading"
+                  @click="fetchImportance(selectedModel)"
+                />
+              </div>
+            </div>
+          </template>
+
+          <div class="text-sm space-y-4">
+            <div class="grid grid-cols-2 gap-2">
+              <div class="p-2 bg-gray-50 dark:bg-gray-800/50 rounded">
+                <p class="text-muted">Train samples</p>
+                <p class="font-bold">{{ modelMeta.metrics.n_train }}</p>
+              </div>
+              <div class="p-2 bg-gray-50 dark:bg-gray-800/50 rounded">
+                <p class="text-muted">Val samples</p>
+                <p class="font-bold">{{ modelMeta.metrics.n_val }}</p>
+              </div>
+            </div>
+
+            <table class="w-full text-sm border-collapse">
+              <thead>
+                <tr class="border-b border-gray-200 dark:border-gray-800">
+                  <th class="text-left py-1">Class</th>
+                  <th class="text-right">Prec</th>
+                  <th class="text-right">Rec</th>
+                  <th class="text-right">F1</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="(v, k) in modelMeta.metrics.classification_report"
+                  :key="String(k)"
+                  class="border-b border-gray-100 dark:border-gray-900 last:border-0"
+                >
+                  <template v-if="['0', '1', '2'].includes(String(k))">
+                    <td class="py-1 font-medium">
+                      {{
+                        String(k) === '0'
+                          ? 'Home'
+                          : String(k) === '1'
+                            ? 'Draw'
+                            : 'Away'
+                      }}
+                    </td>
+                    <td class="text-right">{{ v.precision.toFixed(2) }}</td>
+                    <td class="text-right">{{ v.recall.toFixed(2) }}</td>
+                    <td class="text-right">
+                      {{ v.f1_score?.toFixed(2) || v['f1-score']?.toFixed(2) }}
+                    </td>
+                  </template>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </UCard>
+
+        <UCard class="space-y-3">
+          <h3 class="text-sm font-semibold">How splitting works</h3>
+          <p class="text-xs text-muted">
+            The code in
+            <code class="font-mono text-[11px]">production/train.py</code> does:
+          </p>
+          <pre
+            class="text-[11px] bg-gray-100 dark:bg-gray-800 p-2 rounded overflow-x-auto font-mono"
+          >
 train_mask = df["match_date"] &lt; cutoff
 val_mask   = df["match_date"] >= cutoff</pre
-        >
-        <ul class="space-y-2 text-xs text-muted">
-          <li>
-            <span class="font-medium text-emerald-600 dark:text-emerald-400"
-              >Training:</span
-            >
-            All matches <strong>before</strong> the cutoff date.
-          </li>
-          <li>
-            <span class="font-medium text-amber-600 dark:text-amber-400"
-              >Validation:</span
-            >
-            All matches <strong>on or after</strong> the cutoff date.
-          </li>
-          <li class="pt-1 border-t border-gray-200 dark:border-gray-700">
-            <span class="font-medium">No overlap:</span>
-            Validation data is never seen during training.
-          </li>
-        </ul>
-      </UCard>
+          >
+          <ul class="space-y-2 text-xs text-muted">
+            <li>
+              <span class="font-medium text-emerald-600 dark:text-emerald-400"
+                >Training:</span
+              >
+              All matches <strong>before</strong> the cutoff date.
+            </li>
+            <li>
+              <span class="font-medium text-amber-600 dark:text-amber-400"
+                >Validation:</span
+              >
+              All matches <strong>on or after</strong> the cutoff date.
+            </li>
+          </ul>
+        </UCard>
+      </div>
     </div>
 
     <!-- Feature Importance Section -->
@@ -274,7 +373,10 @@ val_mask   = df["match_date"] >= cutoff</pre
           </UButton>
         </div>
       </template>
-      <FeatureImportance :data="importanceData" :loading="importanceLoading" />
+      <FeatureImportance
+        :data="modelMeta?.feature_importance || []"
+        :loading="importanceLoading"
+      />
     </UCard>
   </UPageSection>
 </template>

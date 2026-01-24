@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 from features import build_features
 from .engine import build_X, load_model
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
+ROOT_DIR = Path(__file__).resolve().parents[3]
 PROCESSED_DIR = ROOT_DIR / "data" / "processed"
 
 def _load_processed_matches() -> pd.DataFrame:

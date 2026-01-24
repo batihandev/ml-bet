@@ -5,11 +5,56 @@ import type { TableColumn } from '@nuxt/ui'
 const config = useRuntimeConfig()
 
 const form = reactive({
-  startDate: '2024-12-31',
-  endDate: '2025-06-01',
+  startDate: '2024-12-30',
+  endDate: '2025-06-30',
   minEdge: 0.015,
   stake: 1,
   kellyMult: 0
+})
+
+// Default VAL_START from training preset (Last 5 Years)
+const VAL_START = ref('2024-12-30')
+
+const backtestPresets = computed(() => [
+  { label: 'Last 6 Months', start: '2024-12-30' },
+  { label: 'Last 12 Months', start: '2024-06-30' },
+  { label: 'Full Val', start: VAL_START.value }
+])
+
+function applyBacktestPreset(p: any) {
+  let start = p.start
+
+  // Clamp to VAL_START if needed
+  if (p.label !== 'Full Val' && new Date(start) < new Date(VAL_START.value)) {
+    start = VAL_START.value
+  }
+
+  form.startDate = start
+  form.endDate = '2025-06-30'
+}
+
+const metadataLoading = ref(false)
+async function fetchModelMetadata() {
+  const config = useRuntimeConfig()
+  metadataLoading.value = true
+  try {
+    // We assume the production model for now
+    const res = await $fetch<any>(
+      `${config.public.apiBase}/train/feature-importance/model_ft_1x2`
+    )
+    const cutoff = res.training_params?.cutoff_date
+    if (cutoff && cutoff !== 'None') {
+      VAL_START.value = cutoff
+    }
+  } catch (e) {
+    console.error('Failed to fetch model metadata for backtest', e)
+  } finally {
+    metadataLoading.value = false
+  }
+}
+
+onMounted(() => {
+  fetchModelMetadata()
 })
 
 const loading = ref(false)
@@ -18,7 +63,7 @@ type Summary = {
   total_bets: number
   total_staked: number
   total_profit: number
-  overall_roi: number
+  roi: number
 }
 
 type MarketRow = {
@@ -50,6 +95,15 @@ const marketColumns: TableColumn<MarketRow>[] = [
   { accessorKey: 'bets', header: 'Bets' },
   { accessorKey: 'wins', header: 'Wins' },
   {
+    accessorKey: 'profit',
+    header: 'Profit',
+    cell: ({ row }) => {
+      const v = (row.getValue('profit') as number) ?? 0
+      const cls = v >= 0 ? 'text-emerald-500' : 'text-red-500'
+      return h('span', { class: cls }, v.toFixed(2))
+    }
+  },
+  {
     accessorKey: 'hit_rate',
     header: 'Hit rate',
     cell: ({ row }) => {
@@ -73,7 +127,15 @@ const divisionColumns: TableColumn<DivisionRow>[] = [
   { accessorKey: 'bets', header: 'Bets' },
   { accessorKey: 'wins', header: 'Wins' },
   { accessorKey: 'staked', header: 'Staked' },
-  { accessorKey: 'profit', header: 'Profit' },
+  {
+    accessorKey: 'profit',
+    header: 'Profit',
+    cell: ({ row }) => {
+      const v = (row.getValue('profit') as number) ?? 0
+      const cls = v >= 0 ? 'text-emerald-500' : 'text-red-500'
+      return h('span', { class: cls }, v.toFixed(2))
+    }
+  },
   {
     accessorKey: 'roi',
     header: 'ROI',
@@ -187,10 +249,33 @@ async function runBacktest() {
           </div>
 
           <div class="flex items-center justify-between gap-4">
-            <p class="text-xs text-muted">
-              Dates here control only the backtest window. Training window is
-              configured above.
-            </p>
+            <div class="flex items-center gap-4">
+              <div class="flex gap-2">
+                <UButton
+                  v-for="p in backtestPresets"
+                  :key="p.label"
+                  size="xs"
+                  variant="soft"
+                  @click="applyBacktestPreset(p)"
+                >
+                  {{ p.label }}
+                </UButton>
+              </div>
+              <div class="flex items-center gap-1.5 text-xs text-muted">
+                <UIcon name="i-lucide-info" class="h-3.5 w-3.5" />
+                <span
+                  >Available from: <strong>{{ VAL_START }}</strong></span
+                >
+                <UButton
+                  variant="ghost"
+                  icon="i-lucide-refresh-cw"
+                  size="xs"
+                  :loading="metadataLoading"
+                  class="-ml-1"
+                  @click="fetchModelMetadata"
+                />
+              </div>
+            </div>
 
             <UButton
               color="primary"
@@ -233,12 +318,10 @@ async function runBacktest() {
           <p class="mt-2 text-2xl font-semibold">
             <span
               :class="
-                (summary?.overall_roi ?? 0) >= 0
-                  ? 'text-emerald-500'
-                  : 'text-red-500'
+                (summary?.roi ?? 0) >= 0 ? 'text-emerald-500' : 'text-red-500'
               "
             >
-              {{ summary ? (summary.overall_roi * 100).toFixed(1) + '%' : '–' }}
+              {{ summary ? (summary.roi * 100).toFixed(1) + '%' : '–' }}
             </span>
           </p>
         </UCard>
@@ -247,20 +330,20 @@ async function runBacktest() {
       <div class="grid gap-6 lg:grid-cols-[minmax(0,1.5fr),minmax(0,1.2fr)]">
         <!-- Markets + equity -->
         <div class="space-y-4">
-            <UCard>
-              <h3 class="mb-3 text-sm font-semibold">Per-market performance</h3>
+          <UCard>
+            <h3 class="mb-3 text-sm font-semibold">Per-market performance</h3>
 
-              <PerformanceTable
-                :data="markets"
-                :columns="marketColumns"
-                empty-message="Run a backtest to see per-market stats."
-              />
-            </UCard>
+            <PerformanceTable
+              :data="markets"
+              :columns="marketColumns"
+              empty-message="Run a backtest to see per-market stats."
+            />
+          </UCard>
 
-            <UCard>
-              <h3 class="mb-3 text-sm font-semibold">Equity curve</h3>
-              <EquityCurve :equity="equity" />
-            </UCard>
+          <UCard>
+            <h3 class="mb-3 text-sm font-semibold">Equity curve</h3>
+            <EquityCurve :equity="equity" />
+          </UCard>
         </div>
 
         <!-- Per-division breakdown -->
