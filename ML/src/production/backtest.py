@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 from pathlib import Path
+import json
 from typing import Optional, Dict, Any, List
 from .predict import predict_ft_1x2
 from .schema import CLASS_MAPPING, TARGET_COL
@@ -18,10 +19,38 @@ def backtest_production_1x2(
     """
     Run backtest for the production single-model FT 1X2.
     """
+    # Check model meta for training cutoff
+    meta_path = ROOT_DIR / "models" / "model_ft_1x2_meta.json"
+    training_cutoff = None
+    data_end = pd.to_datetime("2025-06-30")
+    
+    if meta_path.exists():
+        with open(meta_path, "r") as f:
+            meta = json.load(f)
+            cutoff_str = meta.get("training_params", {}).get("training_cutoff_date")
+            if cutoff_str:
+                training_cutoff = pd.to_datetime(cutoff_str)
+    
+    if training_cutoff and training_cutoff >= data_end:
+        return {
+            "summary": {"total_bets": 0, "status": "Not available (no labeled data after cutoff)"},
+            "markets": [],
+            "league_stats_df": pd.DataFrame(),
+            "daily_equity_df": pd.DataFrame(),
+            "bets_df": pd.DataFrame()
+        }
+
     df_all = load_features()
     
-    if start_date:
-        df_all = df_all[df_all["match_date"] >= pd.to_datetime(start_date)]
+    # Resolve and clamp start_date
+    resolved_start = pd.to_datetime(start_date) if start_date else df_all["match_date"].min()
+    if training_cutoff:
+        min_allowed = training_cutoff + pd.Timedelta(days=1)
+        if resolved_start < min_allowed:
+            print(f"Clamping backtest start from {resolved_start.date()} to {min_allowed.date()} (Training cutoff + 1 day)")
+            resolved_start = min_allowed
+    
+    df_all = df_all[df_all["match_date"] >= resolved_start]
     if end_date:
         df_all = df_all[df_all["match_date"] <= pd.to_datetime(end_date)]
 

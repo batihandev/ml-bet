@@ -45,7 +45,7 @@ def load_production_model():
         raise FileNotFoundError(f"Production model not found: {model_path}")
     
     bundle = joblib.load(model_path)
-    return bundle["model"], bundle["features"]
+    return bundle.get("base_model"), bundle.get("calibrator"), bundle["features"]
 
 def calculate_implied_probs(odd_home, odd_draw, odd_away):
     """Calculate normalized implied probabilities from bookmaker odds."""
@@ -58,7 +58,7 @@ def calculate_implied_probs(odd_home, odd_draw, odd_away):
 
 def predict_ft_1x2(df_features: pd.DataFrame) -> List[Dict[str, Any]]:
     """Perform production inference on a dataframe of features."""
-    model, features = load_production_model()
+    base_model, calibrator, features = load_production_model()
     
     # Ensure all required features exist
     X = df_features.copy()
@@ -67,7 +67,20 @@ def predict_ft_1x2(df_features: pd.DataFrame) -> List[Dict[str, Any]]:
         X[c] = 0.0
     X = X[features].fillna(0.0)
     
-    probs = model.predict_proba(X) # Shape (N, 3)
+    # Use base model to get raw probabilities
+    p_raw = base_model.predict_proba(X)
+    
+    # Use calibrator if available
+    if calibrator:
+        if hasattr(calibrator, "transform"):
+            probs = calibrator.transform(p_raw)
+        elif hasattr(calibrator, "predict_proba_from_raw"):
+            probs = calibrator.predict_proba_from_raw(p_raw)
+        else:
+            # Fallback if it's a standard sklearn calibrator
+            probs = calibrator.predict_proba(X)
+    else:
+        probs = p_raw
     
     results = []
     for i in range(len(df_features)):

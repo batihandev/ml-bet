@@ -11,9 +11,12 @@ from ..ws_progress import progress_manager
 router = APIRouter(prefix="/train", tags=["training"])
 
 class TrainRequest(BaseModel):
-    train_start: Optional[str] = None
-    train_end: Optional[str] = None
-    cutoff_date: Optional[str] = None
+    train_start: Optional[str] = "2020-06-30"
+    training_cutoff_date: Optional[str] = "2025-06-30"
+    oof_calibration: bool = True
+    calibration_method: str = "none"
+    oof_step: str = "1 month"
+    oof_min_train_span: str = "24 months"
     n_estimators: int = 300
     max_depth: int = 8
     min_samples_leaf: int = 50
@@ -22,13 +25,17 @@ async def background_train_task(params: dict):
     await progress_manager.broadcast({"type": "training_started", "payload": {"params": params}})
     try:
         await anyio.to_thread.run_sync(
-            run_training_process, 
-            params.get("train_start"),
-            params.get("train_end"),
-            params.get("cutoff_date"),
-            params.get("n_estimators", 300),
-            params.get("max_depth", 8),
-            params.get("min_samples_leaf", 50)
+            lambda: run_training_process(
+                train_start=params.get("train_start"),
+                training_cutoff_date=params.get("training_cutoff_date"),
+                oof_calibration=params.get("oof_calibration", True),
+                calibration_method=params.get("calibration_method", "none"),
+                oof_step=params.get("oof_step", "1 month"),
+                oof_min_train_span=params.get("oof_min_train_span", "24 months"),
+                n_estimators=params.get("n_estimators", 300),
+                max_depth=params.get("max_depth", 8),
+                min_samples_leaf=params.get("min_samples_leaf", 50)
+            )
         )
         await progress_manager.broadcast({"type": "training_completed", "payload": {"status": "success"}})
     except Exception as exc:

@@ -7,30 +7,46 @@ const config = useRuntimeConfig()
 const form = reactive({
   startDate: '2024-12-30',
   endDate: '2025-06-30',
-  minEdge: 0.015,
+  minEdge: 0.05,
   stake: 1,
   kellyMult: 0
 })
 
-// Default VAL_START from training preset (Last 5 Years)
-const VAL_START = ref('2024-12-30')
+// Default TRAINING_CUTOFF from training preset
+const TRAINING_CUTOFF = ref('2024-12-29')
+const DATA_END = '2025-06-30'
 
-const backtestPresets = computed(() => [
-  { label: 'Last 6 Months', start: '2024-12-30' },
-  { label: 'Last 12 Months', start: '2024-06-30' },
-  { label: 'Full Val', start: VAL_START.value }
-])
+const minBacktestStart = computed(() => {
+  const d = new Date(TRAINING_CUTOFF.value)
+  d.setDate(d.getDate() + 1)
+  return d.toISOString().split('T')[0]
+})
+
+const isBacktestAvailable = computed(() => {
+  return TRAINING_CUTOFF.value < DATA_END
+})
+
+const backtestPresets = computed(() => {
+  return [
+    { label: 'Last 6 Months', start: '2024-12-30' },
+    { label: 'Last 12 Months', start: '2024-06-30' },
+    { label: 'Full Test', start: minBacktestStart.value }
+  ]
+})
 
 function applyBacktestPreset(p: any) {
-  let start = p.start
+  const startStr = p.start as string | undefined
+  let startSelected = startStr
 
-  // Clamp to VAL_START if needed
-  if (p.label !== 'Full Val' && new Date(start) < new Date(VAL_START.value)) {
-    start = VAL_START.value
+  // Clamp to training_cutoff + 1 day if needed
+  if (startStr && new Date(startStr) < new Date(minBacktestStart.value || 0)) {
+    startSelected = minBacktestStart.value
   }
 
-  form.startDate = start
-  form.endDate = '2025-06-30'
+  if (startSelected) {
+    form.startDate = startSelected
+  }
+  form.endDate = DATA_END
 }
 
 const metadataLoading = ref(false)
@@ -38,13 +54,21 @@ async function fetchModelMetadata() {
   const config = useRuntimeConfig()
   metadataLoading.value = true
   try {
-    // We assume the production model for now
     const res = await $fetch<any>(
       `${config.public.apiBase}/train/feature-importance/model_ft_1x2`
     )
-    const cutoff = res.training_params?.cutoff_date
+    const cutoff = res.training_params?.training_cutoff_date
     if (cutoff && cutoff !== 'None') {
-      VAL_START.value = cutoff
+      TRAINING_CUTOFF.value = cutoff
+      // Also sync form start if it's currently before the new cutoff
+      const minStart = minBacktestStart.value
+      if (
+        form.startDate &&
+        minStart &&
+        new Date(form.startDate) < new Date(minStart)
+      ) {
+        form.startDate = minStart
+      }
     }
   } catch (e) {
     console.error('Failed to fetch model metadata for backtest', e)
@@ -264,7 +288,12 @@ async function runBacktest() {
               <div class="flex items-center gap-1.5 text-xs text-muted">
                 <UIcon name="i-lucide-info" class="h-3.5 w-3.5" />
                 <span
-                  >Available from: <strong>{{ VAL_START }}</strong></span
+                  >Available from:
+                  <strong :class="!isBacktestAvailable ? 'text-red-500' : ''">
+                    {{
+                      isBacktestAvailable ? minBacktestStart : 'No labeled data'
+                    }}
+                  </strong></span
                 >
                 <UButton
                   variant="ghost"
@@ -279,11 +308,12 @@ async function runBacktest() {
 
             <UButton
               color="primary"
+              :disabled="!isBacktestAvailable"
               :loading="loading"
               icon="i-lucide-activity"
               @click="runBacktest"
             >
-              Run backtest
+              {{ isBacktestAvailable ? 'Run backtest' : 'Not available' }}
             </UButton>
           </div>
         </UForm>

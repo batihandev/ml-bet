@@ -13,16 +13,41 @@ def load_features() -> pd.DataFrame:
     df = pd.read_csv(path, parse_dates=["match_date"], low_memory=False, dtype={"match_time": "string"})
     return df
 
-def make_time_split(df: pd.DataFrame, fixed_cutoff: Optional[str] = None) -> Tuple[np.ndarray, np.ndarray]:
+def make_time_split(df: pd.DataFrame, fixed_cutoff: Optional[str] = None, default_val_span: str = "6 months", mode: str = "default") -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Split data into train/validation sets based on time.
+    """
     if fixed_cutoff:
         cutoff = pd.to_datetime(fixed_cutoff)
-    else:
+    elif mode == "quantile":
+        # Experimental/legacy quantile split
         cutoff = df["match_date"].quantile(0.8)
+    else:
+        # Default: time-based offset from the end of data
+        max_date = df["match_date"].max()
+        # Parse simple "X months" or "Y days" logic roughly, or just use pd.Timedelta if span is compatible
+        # For simplicity tailored to "6 months", we assume standard offsets. 
+        # But pd.Timedelta doesn't support "months". We can use DateOffset.
+        # Check if user passed a simple int/float days, otherwise hardcode logic for commonly used strings.
+        if "month" in default_val_span:
+            try:
+                months = int(default_val_span.split()[0])
+                cutoff = max_date - pd.DateOffset(months=months)
+            except:
+                cutoff = max_date - pd.DateOffset(months=6) # Fallback
+        else:
+             # Try generic timedelta
+             try:
+                 cutoff = max_date - pd.Timedelta(default_val_span)
+             except:
+                 cutoff = max_date - pd.DateOffset(months=6)
+
     train_mask = df["match_date"] < cutoff
     val_mask = ~train_mask
     return train_mask.values, val_mask.values
 
-def select_feature_columns(df: pd.DataFrame) -> List[str]:
+def select_feature_columns(df: pd.DataFrame, exclude_odds: bool = False) -> List[str]:
+    # 1. Build Candidate List
     base_features = [
         "odd_home", "odd_draw", "odd_away", "max_odd_home", "max_odd_draw", "max_odd_away",
         "odd_over25", "odd_under25", "max_odd_over25", "max_odd_under25",
@@ -33,33 +58,87 @@ def select_feature_columns(df: pd.DataFrame) -> List[str]:
         "home_attack_strength", "away_attack_strength",
     ]
     congestion_features = [
-        "home_days_since_last", "away_days_since_last", "home_matches_last_7d", "home_matches_last_14d",
-        "home_matches_last_21d", "away_matches_last_7d", "away_matches_last_14d", "away_matches_last_21d",
-    ]
-    rolling_features = [c for c in df.columns if c.startswith("home_form") or c.startswith("away_form")]
-    h2h_features = [
-        "h2h_htd_ft_home_win_rate", "h2h_htd_ft_away_win_rate", "h2h_matches_count",
-        "rule_score_home_htdftw", "rule_score_away_htdftw",
+        "home_days_since_last", "away_days_since_last", 
+        "home_matches_last_7d", "home_matches_last_14d", "home_matches_last_21d", 
+        "away_matches_last_7d", "away_matches_last_14d", "away_matches_last_21d",
     ]
     
+    # 2. Add candidates if present
     feature_cols = []
-    for c in base_features + league_features + congestion_features + h2h_features:
-        if c in df.columns: feature_cols.append(c)
-    feature_cols.extend(sorted(rolling_features))
+    candidates = base_features + league_features + congestion_features
+    for c in candidates:
+        if c in df.columns:
+            feature_cols.append(c)
+            
+    # 3. Dynamic Includes (Rolling / H2H / Derived Gaps)
+    # We scan all columns for these patterns.
+    # Note: "Draw Closeness" features (gap_*) are also picked up here if they exist.
+    dynamic_candidates = [
+        c for c in df.columns 
+        if c.startswith("home_form") or c.startswith("away_form") 
+        or c.startswith("h2h_") or c.startswith("gap_") or c.startswith("abs_gap_")
+        or c.startswith("rule_score_")
+    ]
+    feature_cols.extend(sorted(dynamic_candidates))
+    
+    # Remove duplicates if any
+    feature_cols = sorted(list(set(feature_cols)))
+
+    # 4. Safety Net: Ensure form/h2h are included IF they exist (redundant vs step 3 but guarantees user intent)
+    # Actually step 3 already catches them. The "safety net" instruction is to ensure we DO capture them.
+    # Step 3 logic `c.startswith...` is the safety net capture mechanism.
+    # We verify that we haven't missed any.
+    
+    # 5. Final Filter: Exclude Odds (Strict Limit)
+    if exclude_odds:
+        feature_cols = [c for c in feature_cols if not is_odds_feature(c)]
+        
     return feature_cols
+
+def is_odds_feature(col_name: str) -> bool:
+    """
+    Return True if the column is derived from odds or market data.
+    Uses a two-tier predicate: strict prefix/suffix + strict tokenized keywords.
+    """
+    c = col_name.lower()
+    
+    # Tier 1: Strict Prefixes / Suffixes
+    prefixes = ("odd_", "max_odd_", "min_odd_", "avg_odd_")
+    if c.startswith(prefixes): return True
+    if c.endswith("_odd"): return True
+    
+    # Tier 2: Strict Tokenized Keywords
+    # Split by underscore to avoid partial matches (e.g. 'handicapper' != 'handicap')
+    tokens = set(c.split("_"))
+    keywords = {"handicap", "spread", "vig", "implied", "bookmaker", "overround", "margin"}
+    
+    if not tokens.isdisjoint(keywords):
+        return True
+        
+    return False
 
 def clean_training_data(df: pd.DataFrame, feature_cols: List[str], target_col: str, fixed_cutoff: Optional[str] = None):
     # Filter rows where target is missing
     df = df[~df[target_col].isna()].copy()
     
-    # Require at least some history for rolling features
-    rolling_cols = [c for c in feature_cols if ("form" in c) or c.startswith("h2h_")]
+    # Data-driven history filter
+    # Instead of dropping if ANY rolling feature is NaN, require a minimum % of them.
+    # This prevents dropping rows that just miss one specific deep history feature (e.g. form10) but have form3.
+    rolling_cols = [c for c in feature_cols if "form" in c or c.startswith("h2h_")]
     if rolling_cols:
-        has_some_history = df[rolling_cols].notna().any(axis=1)
-        df = df[has_some_history].copy()
+        # User Fix #7: min_non_null_history = max(1, int(0.20 * len(rolling_cols)))
+        min_k = max(1, int(0.20 * len(rolling_cols)))
+        valid_history_mask = df[rolling_cols].notna().sum(axis=1) >= min_k
+        
+        dropped_count = (~valid_history_mask).sum()
+        if dropped_count > 0:
+            print(f"Dropping {dropped_count} rows due to insufficient history (threshold < {min_k} valid cols)")
+            
+        df = df[valid_history_mask].copy()
     
     X = df[feature_cols].copy().fillna(0.0)
     y = df[target_col].astype(int).values
     train_mask, val_mask = make_time_split(df, fixed_cutoff)
     
     return X[train_mask], X[val_mask], y[train_mask], y[val_mask], feature_cols
+

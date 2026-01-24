@@ -3,8 +3,13 @@ import { reactive, ref, computed } from 'vue'
 
 const form = reactive({
   trainStart: '2020-06-30',
-  trainEnd: '2025-06-30',
-  cutoffDate: '2024-12-30',
+  trainingCutoffDate: '2025-06-30',
+  oofCalibration: true,
+  calibrationMethod: 'none',
+  oofStep: '1 month',
+  oofMinTrainSpan: '24 months',
+  backtestStart: '2024-12-30',
+  backtestEnd: '2025-06-30',
   nEstimators: 300,
   maxDepth: 8,
   minSamplesLeaf: 50
@@ -12,29 +17,49 @@ const form = reactive({
 
 const trainingPresets = [
   {
-    label: 'Last 5 Years',
-    start: '2020-06-30',
-    end: '2025-06-30',
-    val: '2024-12-30'
+    label: 'Eval 5y + 6m test',
+    trainStart: '2020-06-30',
+    trainingCutoffDate: '2024-12-29',
+    backtestStart: '2024-12-30',
+    oofCalibration: true,
+    calibrationMethod: 'isotonic'
   },
   {
-    label: 'Last 10 Years',
-    start: '2015-06-30',
-    end: '2025-06-30',
-    val: '2024-06-30'
+    label: 'Eval 5y + 12m test',
+    trainStart: '2020-06-30',
+    trainingCutoffDate: '2024-06-29',
+    backtestStart: '2024-06-30',
+    oofCalibration: true,
+    calibrationMethod: 'isotonic'
   },
   {
-    label: 'Start to End',
-    start: '2000-01-01',
-    end: '2025-06-30',
-    val: '2023-06-30'
+    label: 'Eval 10y + 6m test',
+    trainStart: '2015-06-30',
+    trainingCutoffDate: '2024-12-29',
+    backtestStart: '2024-12-30',
+    oofCalibration: true,
+    calibrationMethod: 'isotonic'
+  },
+  {
+    label: 'Deploy (All)',
+    trainStart: '2020-06-30',
+    trainingCutoffDate: '2025-06-30',
+    backtestStart: '',
+    oofCalibration: true,
+    calibrationMethod: 'none'
   }
 ]
 
 function applyTrainingPreset(p: any) {
-  form.trainStart = p.start
-  form.trainEnd = p.end
-  form.cutoffDate = p.val
+  form.trainStart = p.trainStart
+  form.trainingCutoffDate = p.trainingCutoffDate
+  form.oofCalibration = p.oofCalibration
+  if (p.calibrationMethod) form.calibrationMethod = p.calibrationMethod
+  if (p.backtestStart) {
+    form.backtestStart = p.backtestStart
+  } else {
+    form.backtestStart = ''
+  }
 }
 
 const loading = ref(false)
@@ -45,11 +70,10 @@ const importanceLoading = ref(false)
 const availableModels = ref<string[]>([])
 const selectedModel = ref('model_ft_1x2')
 
-// Compute the day before cutoff for display
-const lastTrainDate = computed(() => {
-  if (!form.cutoffDate) return 'auto'
-  const d = new Date(form.cutoffDate)
-  d.setDate(d.getDate() - 1)
+const backtestEligibleFrom = computed(() => {
+  if (!form.trainingCutoffDate) return ''
+  const d = new Date(form.trainingCutoffDate)
+  d.setDate(d.getDate() + 1)
   return d.toISOString().split('T')[0]
 })
 
@@ -63,8 +87,13 @@ async function runTraining() {
       method: 'POST',
       body: {
         train_start: form.trainStart || null,
-        train_end: form.trainEnd || null,
-        cutoff_date: form.cutoffDate || null,
+        training_cutoff_date: form.trainingCutoffDate || null,
+        oof_calibration: form.oofCalibration,
+        calibration_method: form.oofCalibration
+          ? form.calibrationMethod
+          : 'none',
+        oof_step: form.oofStep,
+        oof_min_train_span: form.oofMinTrainSpan,
         n_estimators: form.nEstimators,
         max_depth: form.maxDepth,
         min_samples_leaf: form.minSamplesLeaf
@@ -129,14 +158,14 @@ onMounted(() => {
 <template>
   <UPageSection
     id="models"
-    title="Model training window"
-    description="Configure your historical window and cutoff date for training the Random Forest models."
+    title="Model training & OOF Calibration"
+    description="Configure your historical window and forward-chaining OOF calibration."
   >
     <div class="grid gap-6 lg:grid-cols-[minmax(0,2fr),minmax(0,1.4fr)]">
       <!-- Left: form -->
       <UCard class="space-y-4">
         <UForm :state="form" class="space-y-4">
-          <div class="grid gap-4 md:grid-cols-3">
+          <div class="grid gap-4 md:grid-cols-2">
             <UFormField
               label="Data start date"
               help="First match loaded into memory."
@@ -149,25 +178,55 @@ onMounted(() => {
             </UFormField>
 
             <UFormField
-              label="Data end date"
-              help="Last match loaded into memory."
+              label="Training cutoff date"
+              help="Last labeled match date included in training and OOF."
             >
               <UInput
-                v-model="form.trainEnd"
+                v-model="form.trainingCutoffDate"
                 type="date"
                 placeholder="YYYY-MM-DD"
               />
             </UFormField>
+          </div>
+
+          <div
+            class="grid gap-4 md:grid-cols-3 pt-4 border-t border-gray-200 dark:border-gray-800"
+          >
+            <UFormField
+              label="OOF Calibration"
+              help="Enable forward-chaining calibration."
+            >
+              <USwitch v-model="form.oofCalibration" />
+            </UFormField>
 
             <UFormField
-              label="Validation starts at"
-              help="First match used for validation (not training)."
+              label="Calibration Method"
+              help="Method to calibrate probabilities."
+              :disabled="!form.oofCalibration"
             >
-              <UInput
-                v-model="form.cutoffDate"
-                type="date"
-                placeholder="YYYY-MM-DD"
+              <USelect
+                v-model="form.calibrationMethod"
+                :items="[
+                  { label: 'None (Identity)', value: 'none' },
+                  { label: 'Isotonic (Clip+Norm)', value: 'isotonic' }
+                ]"
               />
+            </UFormField>
+
+            <UFormField
+              label="OOF Fold Step"
+              help="Size of each OOF test block."
+              :disabled="!form.oofCalibration"
+            >
+              <UInput v-model="form.oofStep" placeholder="1 month" />
+            </UFormField>
+
+            <UFormField
+              label="OOF Min Train"
+              help="Minimum history before first OOF fold."
+              :disabled="!form.oofCalibration"
+            >
+              <UInput v-model="form.oofMinTrainSpan" placeholder="24 months" />
             </UFormField>
           </div>
 
@@ -199,17 +258,27 @@ onMounted(() => {
             class="rounded-lg bg-gray-100 dark:bg-gray-800 p-3 text-xs space-y-1"
           >
             <div class="flex justify-between">
-              <span class="text-muted">Training:</span>
+              <span class="text-muted">Training Range:</span>
               <span class="font-mono"
-                >{{ form.trainStart || 'auto' }} → {{ lastTrainDate }}</span
+                >{{ form.trainStart }} → {{ form.trainingCutoffDate }}</span
               >
             </div>
             <div class="flex justify-between">
-              <span class="text-muted">Validation:</span>
-              <span class="font-mono"
-                >{{ form.cutoffDate || 'auto' }} →
-                {{ form.trainEnd || 'auto' }}</span
+              <span class="text-muted">OOF Mode:</span>
+              <span
+                class="font-mono text-emerald-500"
+                v-if="form.oofCalibration"
+                >Enabled ({{ form.oofStep }} steps)</span
               >
+              <span class="font-mono text-gray-500" v-else>Disabled</span>
+            </div>
+            <div
+              class="flex justify-between border-t border-gray-200 dark:border-gray-700 mt-1 pt-1"
+            >
+              <span class="text-muted">Backtest Eligible From:</span>
+              <span class="font-mono text-blue-500 font-bold">{{
+                backtestEligibleFrom
+              }}</span>
             </div>
           </div>
 
@@ -247,7 +316,7 @@ onMounted(() => {
         <UCard v-if="modelMeta?.metrics" class="space-y-3">
           <template #header>
             <div class="flex items-center justify-between">
-              <h3 class="text-md font-semibold">Trained Data Metrics</h3>
+              <h3 class="text-md font-semibold">OOF Calibration Metrics</h3>
               <div class="flex items-center gap-2">
                 <UBadge color="success" variant="subtle" size="md">
                   Acc: {{ (modelMeta.metrics.accuracy * 100).toFixed(1) }}%
@@ -266,12 +335,21 @@ onMounted(() => {
           <div class="text-sm space-y-4">
             <div class="grid grid-cols-2 gap-2">
               <div class="p-2 bg-gray-50 dark:bg-gray-800/50 rounded">
-                <p class="text-muted">Train samples</p>
-                <p class="font-bold">{{ modelMeta.metrics.n_train }}</p>
+                <p class="text-muted">OOF Rows</p>
+                <p class="font-bold">{{ modelMeta.metrics.n_oof_rows }}</p>
               </div>
               <div class="p-2 bg-gray-50 dark:bg-gray-800/50 rounded">
-                <p class="text-muted">Val samples</p>
-                <p class="font-bold">{{ modelMeta.metrics.n_val }}</p>
+                <p class="text-muted">OOF Folds</p>
+                <p class="font-bold">{{ modelMeta.metrics.n_folds }}</p>
+              </div>
+              <div
+                class="p-2 bg-gray-50 dark:bg-gray-800/50 rounded col-span-2"
+              >
+                <p class="text-muted">Brier Score / Log Loss</p>
+                <p class="font-bold">
+                  {{ modelMeta.metrics.brier_score?.toFixed(4) }} /
+                  {{ modelMeta.metrics.log_loss?.toFixed(4) }}
+                </p>
               </div>
             </div>
 
@@ -313,29 +391,28 @@ onMounted(() => {
         </UCard>
 
         <UCard class="space-y-3">
-          <h3 class="text-sm font-semibold">How splitting works</h3>
+          <h3 class="text-sm font-semibold">How OOF works</h3>
           <p class="text-xs text-muted">
-            The code in
-            <code class="font-mono text-[11px]">production/train.py</code> does:
+            Instead of a fixed window, we use forward-chaining:
           </p>
-          <pre
-            class="text-[11px] bg-gray-100 dark:bg-gray-800 p-2 rounded overflow-x-auto font-mono"
-          >
-train_mask = df["match_date"] &lt; cutoff
-val_mask   = df["match_date"] >= cutoff</pre
-          >
           <ul class="space-y-2 text-xs text-muted">
             <li>
               <span class="font-medium text-emerald-600 dark:text-emerald-400"
-                >Training:</span
+                >CHRONO FOLDS:</span
               >
-              All matches <strong>before</strong> the cutoff date.
+              Models are trained on past data to predict a future "fold" block.
             </li>
             <li>
               <span class="font-medium text-amber-600 dark:text-amber-400"
-                >Validation:</span
+                >CALIBRATION:</span
               >
-              All matches <strong>on or after</strong> the cutoff date.
+              A calibrator is fit on aggregated OOF predictions.
+            </li>
+            <li>
+              <span class="font-medium text-blue-600 dark:text-blue-400"
+                >FINAL MODEL:</span
+              >
+              Trained on ALL data up to {{ form.trainingCutoffDate }}.
             </li>
           </ul>
         </UCard>
