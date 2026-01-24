@@ -8,12 +8,20 @@ from .data import clean_training_data
 ROOT_DIR = Path(__file__).resolve().parents[2]
 MODELS_DIR = ROOT_DIR / "models"
 
-def train_single_model(df, feature_cols, target_col, model_name, fixed_cutoff=None):
+def train_single_model(
+    df, feature_cols, target_col, model_name, 
+    fixed_cutoff=None,
+    n_estimators=300,
+    max_depth=8,
+    min_samples_leaf=50
+):
     print(f"\n=== Training model for target: {target_col} ===")
     X_train, X_val, y_train, y_val, used_features = clean_training_data(df, feature_cols, target_col, fixed_cutoff)
 
     model = RandomForestClassifier(
-        n_estimators=300, max_depth=8, min_samples_leaf=50,
+        n_estimators=n_estimators, 
+        max_depth=max_depth, 
+        min_samples_leaf=min_samples_leaf,
         n_jobs=-1, random_state=42, class_weight="balanced",
     )
     model.fit(X_train, y_train)
@@ -28,11 +36,29 @@ def train_single_model(df, feature_cols, target_col, model_name, fixed_cutoff=No
     except:
         pass
 
+    # Calculate feature importance
+    importances = model.feature_importances_
+    indices = importances.argsort()[::-1][:20]  # Top 20
+    feature_importance = [
+        {"feature": used_features[i], "importance": float(importances[i])}
+        for i in indices
+    ]
+
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     model_path = MODELS_DIR / f"{model_name}.joblib"
-    joblib.dump({"model": model, "features": used_features, "target": target_col}, model_path)
+    joblib.dump({
+        "model": model, 
+        "features": used_features, 
+        "target": target_col,
+        "feature_importance": feature_importance
+    }, model_path)
 
     with open(MODELS_DIR / f"{model_name}_meta.json", "w") as f:
-        json.dump({"target": target_col, "model_file": str(model_path), "n_features": len(used_features)}, f, indent=2)
+        json.dump({
+            "target": target_col, 
+            "model_file": str(model_path), 
+            "n_features": len(used_features),
+            "feature_importance": feature_importance
+        }, f, indent=2)
     
     print(f"Saved model to {model_path}")

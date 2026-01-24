@@ -8,6 +8,9 @@ def run_training_process(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     cutoff_date: Optional[str] = None,
+    n_estimators: int = 300,
+    max_depth: int = 8,
+    min_samples_leaf: int = 50,
 ):
     print("Loading feature dataset...")
     df = load_features()
@@ -36,7 +39,12 @@ def run_training_process(
 
     for target_col, model_name in targets:
         if target_col in df.columns:
-            train_single_model(df, feature_cols, target_col, model_name, cutoff_date)
+            train_single_model(
+                df, feature_cols, target_col, model_name, cutoff_date,
+                n_estimators=n_estimators,
+                max_depth=max_depth,
+                min_samples_leaf=min_samples_leaf
+            )
 
 if __name__ == "__main__":
     run_training_process(
