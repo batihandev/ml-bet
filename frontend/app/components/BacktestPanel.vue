@@ -3,14 +3,15 @@ import { reactive, ref, h } from 'vue'
 import type { TableColumn } from '@nuxt/ui'
 
 const config = useRuntimeConfig()
+const route = useRoute()
 
 const form = reactive({
-  startDate: '2024-12-30',
-  endDate: '2025-06-30',
-  minEdge: 0.05,
-  minEv: 0.0,
-  stake: 1,
-  kellyMult: 0
+  startDate: (route.query.startDate as string) || '2024-12-30',
+  endDate: (route.query.endDate as string) || '2025-06-30',
+  minEdge: parseFloat(route.query.minEdge as string) || 0.05,
+  minEv: parseFloat(route.query.minEv as string) || 0.0,
+  stake: parseFloat(route.query.stake as string) || 1,
+  kellyMult: parseFloat(route.query.kellyMult as string) || 0
 })
 
 // Default TRAINING_CUTOFF from training preset
@@ -79,7 +80,11 @@ async function fetchModelMetadata() {
 }
 
 onMounted(() => {
-  fetchModelMetadata()
+  fetchModelMetadata().then(() => {
+    if (route.query.autoRun === 'true') {
+      runBacktest()
+    }
+  })
 })
 
 const loading = ref(false)
@@ -89,6 +94,10 @@ type Summary = {
   total_staked: number
   total_profit: number
   roi: number
+  avg_odds: number
+  avg_ev: number
+  roi_p05?: number
+  roi_p95?: number
 }
 
 type MarketRow = {
@@ -337,11 +346,21 @@ async function runBacktest() {
       </UCard>
 
       <!-- Results summary -->
-      <div class="grid gap-4 md:grid-cols-3">
+      <div class="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
         <UCard>
           <p class="text-xs font-medium text-muted">Total bets</p>
           <p class="mt-2 text-2xl font-semibold">
             {{ summary?.total_bets ?? '–' }}
+          </p>
+        </UCard>
+
+        <UCard>
+          <p class="text-xs font-medium text-muted">Avg Odds / EV</p>
+          <p class="mt-2 text-2xl font-semibold">
+            {{ summary ? summary.avg_odds.toFixed(2) : '–' }}
+            <span class="text-xs font-normal text-muted ml-1">
+              evt: {{ summary ? summary.avg_ev.toFixed(3) : '–' }}
+            </span>
           </p>
         </UCard>
 
@@ -371,6 +390,24 @@ async function runBacktest() {
               {{ summary ? (summary.roi * 100).toFixed(1) + '%' : '–' }}
             </span>
           </p>
+        </UCard>
+
+        <UCard v-if="summary?.roi_p05 !== undefined">
+          <p class="text-xs font-medium text-muted">ROI Confidence (90%)</p>
+          <p class="mt-2 text-lg font-semibold">
+            <span
+              :class="
+                summary.roi_p05 >= 0 ? 'text-emerald-500' : 'text-orange-500'
+              "
+            >
+              {{ (summary.roi_p05 * 100).toFixed(1) }}%
+            </span>
+            <span class="mx-1 text-muted text-sm">—</span>
+            <span v-if="summary.roi_p95 !== undefined" class="text-emerald-500">
+              {{ (summary.roi_p95 * 100).toFixed(1) }}%
+            </span>
+          </p>
+          <p class="text-[10px] text-muted">Lower bound (p05) is key.</p>
         </UCard>
       </div>
 

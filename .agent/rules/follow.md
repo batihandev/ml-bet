@@ -50,6 +50,15 @@ Reduce redundancy and improve maintainability by ensuring every piece of logic h
    - Run scripts: `PYTHONPATH=ML/src .venv/bin/python path/to/script.py`
    - Run tests: `PYTHONPATH=ML/src .venv/bin/python -m unittest path/to/test.py`
 
+## Frontend (Nuxt) Routing Rules
+
+- **No Shadowing:** If a directory `pages/foo/` exists, do NOT create `pages/foo.vue`. Use `pages/foo/index.vue` instead. In Nuxt, `foo.vue` acts as a parent layout and shadows all nested routes unless it contains a `<NuxtPage />` component.
+- **Independent Pages:** Prefer `pages/foo/index.vue` and `pages/foo/bar.vue` for independent pages within a module.
+
+## Python Async/Concurrency Rules
+
+- **AnyIO run_sync:** `anyio.to_thread.run_sync` does NOT accept keyword arguments for the target function as its own kwargs. Use `functools.partial` to pass keyword arguments: `await anyio.to_thread.run_sync(partial(func, **kwargs))`.
+
 ## Evaluation Checklist (Self-Review)
 
 - [ ] **Discovery:** Did I check if an equivalent component or utility already exists?
