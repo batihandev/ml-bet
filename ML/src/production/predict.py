@@ -48,19 +48,46 @@ def load_production_model():
     bundle = joblib.load(model_path)
     return bundle.get("base_model"), bundle.get("calibrator"), bundle["features"]
 
-def predict_ft_1x2(df_features: pd.DataFrame) -> List[Dict[str, Any]]:
+def predict_ft_1x2(df_features: pd.DataFrame, debug: int = 0) -> List[Dict[str, Any]]:
     """Perform production inference on a dataframe of features."""
     base_model, calibrator, features = load_production_model()
     
+    # Source classes: calibrator.classes_ if present, else base_model.classes_
+    if calibrator and hasattr(calibrator, "classes_"):
+        model_classes = calibrator.classes_
+    elif hasattr(base_model, "classes_"):
+        model_classes = base_model.classes_
+    else:
+        # Some calibrators or models might not expose classes_ directly
+        # If it's a wrapper, we might need to dig deeper
+        raise ValueError("Neither calibrator nor base_model has 'classes_' attribute.")
+
+    # Convert to list for indexing and safety
+    classes_list = list(model_classes)
+    
+    # Hard Failure: Ensure all required outcomes are present in classes
+    missing = [label for label, cid in CLASS_MAPPING.items() if cid not in classes_list]
+    if missing:
+        raise ValueError(f"Model classes {classes_list} missing required outcomes from CLASS_MAPPING: {missing}")
+
+    # Map from CLASS_MAPPING value to its index in model_classes
+    class_to_idx = {cid: i for i, cid in enumerate(classes_list)}
+    idx_home = class_to_idx[CLASS_MAPPING["home"]]
+    idx_draw = class_to_idx[CLASS_MAPPING["draw"]]
+    idx_away = class_to_idx[CLASS_MAPPING["away"]]
+
     # Ensure all required features exist
     X = df_features.copy()
-    missing = [c for c in features if c not in X.columns]
-    for c in missing:
+    missing_feats = [c for c in features if c not in X.columns]
+    for c in missing_feats:
         X[c] = 0.0
     X = X[features].fillna(0.0)
     
     # Use base model to get raw probabilities
-    p_raw = base_model.predict_proba(X)
+    if hasattr(base_model, "predict_proba"):
+        p_raw = base_model.predict_proba(X)
+    else:
+        raise ValueError("Base model does not support predict_proba")
     
     # Use calibrator if available
     if calibrator:
@@ -77,7 +104,11 @@ def predict_ft_1x2(df_features: pd.DataFrame) -> List[Dict[str, Any]]:
     results = []
     for i in range(len(df_features)):
         row = df_features.iloc[i]
-        p_home, p_draw, p_away = probs[i]
+        
+        # Correct mapping: use indices derived from classes_
+        p_home = float(probs[i, idx_home])
+        p_draw = float(probs[i, idx_draw])
+        p_away = float(probs[i, idx_away])
         
         odd_home = row.get("odd_home")
         odd_draw = row.get("odd_draw")
@@ -97,7 +128,7 @@ def predict_ft_1x2(df_features: pd.DataFrame) -> List[Dict[str, Any]]:
             
             metrics.append({
                 "outcome": "home",
-                "prob": float(p_home),
+                "prob": p_home,
                 "pimp": float(pimp_home),
                 "edge": float(p_home - pimp_home),
                 "ev": float(p_home * oh - 1),
@@ -105,7 +136,7 @@ def predict_ft_1x2(df_features: pd.DataFrame) -> List[Dict[str, Any]]:
             })
             metrics.append({
                 "outcome": "draw",
-                "prob": float(p_draw),
+                "prob": p_draw,
                 "pimp": float(pimp_draw),
                 "edge": float(p_draw - pimp_draw),
                 "ev": float(p_draw * od - 1),
@@ -113,19 +144,20 @@ def predict_ft_1x2(df_features: pd.DataFrame) -> List[Dict[str, Any]]:
             })
             metrics.append({
                 "outcome": "away",
-                "prob": float(p_away),
+                "prob": p_away,
                 "pimp": float(pimp_away),
                 "edge": float(p_away - pimp_away),
                 "ev": float(p_away * oa - 1),
                 "odds": oa
             })
         
-        results.append({
-            "match_id": int(row["match_id"]),
+        match_id = int(row["match_id"])
+        res = {
+            "match_id": match_id,
             "probabilities": {
-                "home": float(p_home),
-                "draw": float(p_draw),
-                "away": float(p_away)
+                "home": p_home,
+                "draw": p_draw,
+                "away": p_away
             },
             "implied_probabilities": {
                 "home": float(implied[0]) if implied else None,
@@ -133,8 +165,39 @@ def predict_ft_1x2(df_features: pd.DataFrame) -> List[Dict[str, Any]]:
                 "away": float(implied[2]) if implied else None
             },
             "metrics": metrics
-        })
+        }
+        results.append(res)
         
+    if debug == 1:
+        # Include debug_info only for the first call/batch (one-time field)
+        # In predict_ft_1x2, we can attach it to the first result or return as a wrapper
+        # The user wants "one-time debug field in API output"
+        # Since this function returns a list of results, we'll return it as a separate key 
+        # but the caller needs to handle it. 
+        # Actually, let's wrap the return if debug=1 or just append to the first item if that's more convenient.
+        # "Add a lightweight one-time debug field in API output (not UI) to confirm mapping"
+        # Let's add it to the first dict in the results list.
+        if results:
+            # Prepare sample rows (max 5)
+            sample_size = min(5, len(df_features))
+            sample_rows = []
+            for i in range(sample_size):
+                sample_rows.append({
+                    "match_id": int(df_features.iloc[i].get("match_id", 0)),
+                    "probs": {
+                        "home": float(probs[i, idx_home]),
+                        "draw": float(probs[i, idx_draw]),
+                        "away": float(probs[i, idx_away])
+                    },
+                    "top_outcome": ["home", "draw", "away"][np.argmax([probs[i, idx_home], probs[i, idx_draw], probs[i, idx_away]])]
+                })
+
+            results[0]["debug_info"] = {
+                "model_classes": [int(c) for c in classes_list],
+                "class_mapping": {k: int(v) for k, v in CLASS_MAPPING.items()},
+                "sample_rows": sample_rows
+            }
+            
     return results
 
 def predict_live_with_history(

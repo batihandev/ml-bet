@@ -10,12 +10,12 @@ from .predict import predict_ft_1x2
 from .backtest_utils import (
     build_df_bt, 
     index_predictions, 
-    select_best_bet, 
     compute_stake, 
     compute_profit, 
     get_actual_outcome,
     compute_max_drawdown
 )
+from .betting_logic import select_bet
 from .bootstrap import bootstrap_roi
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -27,6 +27,8 @@ def backtest_production_1x2(
     min_ev: float = 0.0,
     stake: float = 1.0,
     kelly_mult: float = 0.0,
+    selection_mode: str = "best_ev",
+    debug: int = 0,
 ) -> Dict[str, Any]:
     """
     Run backtest for the production single-model FT 1X2.
@@ -55,7 +57,18 @@ def backtest_production_1x2(
 
     if training_cutoff and data_end and training_cutoff >= data_end:
         return {
-            "summary": {"total_bets": 0, "status": "Not available (no labeled data after cutoff)"},
+            "summary": {
+                "total_bets": 0, 
+                "total_staked": 0.0,
+                "total_profit": 0.0,
+                "roi": 0.0,
+                "avg_odds": 0.0,
+                "avg_edge": 0.0,
+                "avg_ev": 0.0,
+                "avg_selected_prob": 0.0,
+                "outcome_mix": {"home": 0.0, "draw": 0.0, "away": 0.0},
+                "status": "Not available (no labeled data after cutoff)"
+            },
             "markets": [], "league_stats_df": pd.DataFrame(), "daily_equity_df": pd.DataFrame(), "bets_df": pd.DataFrame()
         }
 
@@ -72,21 +85,43 @@ def backtest_production_1x2(
     df_bt = build_df_bt(df_all, resolved_start, resolved_end)
     if df_bt.empty:
         return {
-            "summary": {"total_bets": 0, "status": "No matches in window"},
+            "summary": {
+                "total_bets": 0, 
+                "total_staked": 0.0,
+                "total_profit": 0.0,
+                "roi": 0.0,
+                "avg_odds": 0.0,
+                "avg_edge": 0.0,
+                "avg_ev": 0.0,
+                "avg_selected_prob": 0.0,
+                "outcome_mix": {"home": 0.0, "draw": 0.0, "away": 0.0},
+                "status": "No matches in window"
+            },
             "markets": [], "league_stats_df": pd.DataFrame(), "daily_equity_df": pd.DataFrame(), "bets_df": pd.DataFrame()
         }
 
     total_labeled_matches = len(df_bt)
-    predictions = predict_ft_1x2(df_bt)
+    predictions = predict_ft_1x2(df_bt, debug=debug)
     pred_by_id = index_predictions(predictions)
     
-    bet_rows = []
+    # Debug info from the first prediction if present
+    debug_payload = predictions[0].get("debug_info") if predictions and debug == 1 else None
+
+    # Diagnostic groups
+    group_all_valid = []  # Matches that pass ALL_VALID criteria
+    group_top_passes = [] # subset of group_all_valid where top outcome passes gate
+    bet_rows = []         # subset of group_all_valid where a bet is actually placed
+    
+    n_any_passes_gate = 0
+    n_top_prob_passes_gate = 0
     skipped_missing_pred = 0
+    skipped_invalid_odds = 0
     skipped_no_value = 0
     
     for _, match_row in df_bt.iterrows():
         match_id = int(match_row["match_id"])
         
+        # 1. Prediction present?
         if match_id not in pred_by_id:
             skipped_missing_pred += 1
             continue
@@ -94,13 +129,42 @@ def backtest_production_1x2(
         pred_res = pred_by_id[match_id]
         metrics = pred_res.get("metrics", [])
         
-        best_bet = select_best_bet(metrics, min_edge, min_ev)
-        if not best_bet:
-            skipped_no_value += 1
-            continue
-            
+        # 2. Labeled outcome present? (Handled by df_bt construction mostly, but safe to check)
         actual = get_actual_outcome(match_row)
         if actual is None:
+            continue
+            
+        # 3. Odds valid & metrics non-empty?
+        # If metrics is empty, it means calculate_implied_probs returned None (invalid odds)
+        if not metrics:
+            skipped_invalid_odds += 1
+            continue
+
+        # ALL_VALID group
+        top_metric = max(metrics, key=lambda x: x["prob"])
+        group_all_valid.append({
+            "outcome": top_metric["outcome"],
+            "odds": top_metric["odds"]
+        })
+
+        # ANY_PASSES_GATE check
+        any_passes = any(m["edge"] >= min_edge and m["ev"] >= min_ev and m["odds"] > 1.0 for m in metrics)
+        if any_passes:
+            n_any_passes_gate += 1
+
+        # TOP_PASSES_GATE check
+        top_passes = (top_metric["edge"] >= min_edge and top_metric["ev"] >= min_ev and top_metric["odds"] > 1.0)
+        if top_passes:
+            n_top_prob_passes_gate += 1
+            group_top_passes.append({
+                "outcome": top_metric["outcome"],
+                "odds": top_metric["odds"]
+            })
+
+        # Best bet selection
+        best_bet = select_bet(metrics, min_edge, min_ev, selection_mode)
+        if not best_bet:
+            skipped_no_value += 1
             continue
             
         current_stake = compute_stake(stake, kelly_mult, best_bet["prob"], best_bet["odds"])
@@ -138,7 +202,8 @@ def backtest_production_1x2(
         "min_edge": float(min_edge),
         "min_ev": float(min_ev),
         "stake": float(stake),
-        "kelly_mult": float(kelly_mult)
+        "kelly_mult": float(kelly_mult),
+        "selection_mode": selection_mode
     }
 
     if not bet_rows:
@@ -148,6 +213,15 @@ def backtest_production_1x2(
                 "total_labeled_matches": total_labeled_matches,
                 "skipped_missing_pred": skipped_missing_pred,
                 "skipped_no_value": skipped_no_value,
+                "total_staked": 0.0,
+                "total_profit": 0.0,
+                "roi": 0.0,
+                "hit_rate": 0.0,
+                "avg_odds": 0.0,
+                "avg_edge": 0.0,
+                "avg_ev": 0.0,
+                "avg_selected_prob": 0.0,
+                "outcome_mix": {"home": 0.0, "draw": 0.0, "away": 0.0},
                 **summary_params
             },
             "markets": [], "league_stats_df": pd.DataFrame(), "daily_equity_df": pd.DataFrame(), "bets_df": pd.DataFrame()
@@ -166,6 +240,33 @@ def backtest_production_1x2(
     avg_odds = bets_df["selected_odds"].mean()
     avg_edge = bets_df["selected_edge"].mean()
     avg_ev = bets_df["selected_ev"].mean()
+    avg_prob = bets_df["selected_prob"].mean()
+
+    # Summary construction with diagnostics
+    def get_group_stats(rows: List[Dict[str, Any]], odds_key="odds", outcome_key="outcome"):
+        if not rows:
+            return {
+                "count": 0, "avg_odds": 0.0, "median_odds": 0.0, "p90_odds": 0.0,
+                "mix": {"home": 0.0, "draw": 0.0, "away": 0.0}
+            }
+        df = pd.DataFrame(rows)
+        n = len(df)
+        counts = df[outcome_key].value_counts().to_dict()
+        return {
+            "count": n,
+            "avg_odds": float(round(df[odds_key].mean(), 2)),
+            "median_odds": float(round(df[odds_key].median(), 2)),
+            "p90_odds": float(round(df[odds_key].quantile(0.9), 2)),
+            "mix": {
+                "home": float(round(counts.get("home", 0) / n, 3)),
+                "draw": float(round(counts.get("draw", 0) / n, 3)),
+                "away": float(round(counts.get("away", 0) / n, 3)),
+            }
+        }
+
+    stats_all_valid = get_group_stats(group_all_valid)
+    stats_top_passes = get_group_stats(group_top_passes)
+    stats_placed = get_group_stats(bet_rows, odds_key="selected_odds", outcome_key="selected_outcome")
 
     # Daily equity & MDD
     daily_equity_df = bets_df.groupby("date").agg(
@@ -213,6 +314,9 @@ def backtest_production_1x2(
     
     summary = {
         "total_labeled_matches": total_labeled_matches,
+        "n_all_valid": stats_all_valid["count"],
+        "n_any_passes_gate": n_any_passes_gate,
+        "n_top_prob_passes_gate": n_top_prob_passes_gate,
         "total_bets": total_bets,
         "total_staked": float(round(total_staked, 2)),
         "total_profit": float(round(total_profit, 2)),
@@ -221,11 +325,20 @@ def backtest_production_1x2(
         "avg_odds": float(round(avg_odds, 3)),
         "avg_edge": float(round(avg_edge, 4)),
         "avg_ev": float(round(avg_ev, 4)),
+        "avg_selected_prob": float(round(avg_prob, 4)),
+        
+        "stats_all_valid": stats_all_valid,
+        "stats_top_passes_gate": stats_top_passes,
+        "stats_placed_bets": stats_placed,
+        
+        "outcome_mix": stats_placed["mix"],  # Keep for backward compatibility
         "max_drawdown": float(round(mdd, 2)),
         "effective_start_date": str(resolved_start.date()),
         "effective_end_date": str(resolved_end.date()),
         "skipped_missing_pred": skipped_missing_pred,
+        "skipped_invalid_odds": skipped_invalid_odds,
         "skipped_no_value": skipped_no_value,
+        "debug_info": debug_payload,
         **summary_params
     }
     

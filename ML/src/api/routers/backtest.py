@@ -15,6 +15,8 @@ class BacktestRequest(BaseModel):
     min_ev: float = 0.0
     stake: float = 1.0
     kelly_mult: float = 0.0
+    selection_mode: str = "best_ev"
+    debug: int = 0
 
 class SweepRequest(BaseModel):
     start_date: Optional[str] = None
@@ -25,6 +27,8 @@ class SweepRequest(BaseModel):
     kelly_mult: float = 0.0
     min_bets: int = 300
     bootstrap_n: int = 1000
+    selection_mode: str = "best_ev"
+    debug: int = 0
 
 def run_backtest_json(params: Dict[str, Any]) -> Dict[str, Any]:
     result = backtest_ft_1x2_core(
@@ -34,6 +38,8 @@ def run_backtest_json(params: Dict[str, Any]) -> Dict[str, Any]:
         min_ev=float(params.get("min_ev", 0.0)),
         stake=float(params.get("stake", 1.0)),
         kelly_mult=float(params.get("kelly_mult", 0.0)),
+        selection_mode=params.get("selection_mode", "best_ev"),
+        debug=int(params.get("debug", 0))
     )
     # Ensure serializability of dates
     if not result["bets_df"].empty:

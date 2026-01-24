@@ -11,7 +11,8 @@ const form = reactive({
   minEdge: parseFloat(route.query.minEdge as string) || 0.05,
   minEv: parseFloat(route.query.minEv as string) || 0.0,
   stake: parseFloat(route.query.stake as string) || 1,
-  kellyMult: parseFloat(route.query.kellyMult as string) || 0
+  kellyMult: parseFloat(route.query.kellyMult as string) || 0,
+  selectionMode: (route.query.selectionMode as string) || 'best_ev'
 })
 
 // Default TRAINING_CUTOFF from training preset
@@ -94,8 +95,16 @@ type Summary = {
   total_staked: number
   total_profit: number
   roi: number
+  hit_rate: number
+  wins?: number
   avg_odds: number
   avg_ev: number
+  avg_selected_prob?: number
+  outcome_mix?: {
+    home: number
+    draw: number
+    away: number
+  }
   roi_p05?: number
   roi_p95?: number
 }
@@ -200,7 +209,8 @@ async function runBacktest() {
         min_edge: form.minEdge,
         min_ev: form.minEv,
         stake: form.stake,
-        kelly_mult: form.kellyMult
+        kelly_mult: form.kellyMult,
+        selection_mode: form.selectionMode
       }
     })
 
@@ -296,6 +306,19 @@ async function runBacktest() {
                 Kelly = 0 → flat stake only. Kelly ≈ 0.25 is a common cap.
               </p>
             </UFormField>
+
+            <UFormField
+              label="Selection Mode"
+              help="How to pick the bet among Home/Draw/Away."
+            >
+              <USelect
+                v-model="form.selectionMode"
+                :items="[
+                  { label: 'Best EV', value: 'best_ev' },
+                  { label: 'Top Prob Only', value: 'top_prob_only' }
+                ]"
+              />
+            </UFormField>
           </div>
 
           <div class="flex items-center justify-between gap-4">
@@ -348,24 +371,53 @@ async function runBacktest() {
       <!-- Results summary -->
       <div class="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
         <UCard>
-          <p class="text-xs font-medium text-muted">Total bets</p>
+          <p class="text-xs font-medium text-muted">Total bets / Wins</p>
           <p class="mt-2 text-2xl font-semibold">
             {{ summary?.total_bets ?? '–' }}
-          </p>
-        </UCard>
-
-        <UCard>
-          <p class="text-xs font-medium text-muted">Avg Odds / EV</p>
-          <p class="mt-2 text-2xl font-semibold">
-            {{ summary ? summary.avg_odds.toFixed(2) : '–' }}
             <span class="text-xs font-normal text-muted ml-1">
-              evt: {{ summary ? summary.avg_ev.toFixed(3) : '–' }}
+              w:
+              {{
+                summary?.wins ??
+                (summary
+                  ? Math.round(summary.total_bets * summary.hit_rate)
+                  : '–')
+              }}
             </span>
           </p>
         </UCard>
 
         <UCard>
-          <p class="text-xs font-medium text-muted">Total profit</p>
+          <p class="text-xs font-medium text-muted">Avg Odds / Prob</p>
+          <p class="mt-2 text-2xl font-semibold">
+            {{ summary ? summary.avg_odds.toFixed(2) : '–' }}
+            <span class="text-xs font-normal text-muted ml-1">
+              p:
+              {{
+                summary?.avg_selected_prob
+                  ? (summary.avg_selected_prob * 100).toFixed(1) + '%'
+                  : '–'
+              }}
+            </span>
+          </p>
+        </UCard>
+
+        <UCard>
+          <p class="text-xs font-medium text-muted">Avg EV / Mix</p>
+          <p class="mt-2 text-2xl font-semibold">
+            {{ summary ? summary.avg_ev.toFixed(3) : '–' }}
+            <span
+              v-if="summary?.outcome_mix"
+              class="block text-[10px] font-normal text-muted mt-1"
+            >
+              H:{{ (summary.outcome_mix.home * 100).toFixed(0) }}% D:{{
+                (summary.outcome_mix.draw * 100).toFixed(0)
+              }}% A:{{ (summary.outcome_mix.away * 100).toFixed(0) }}%
+            </span>
+          </p>
+        </UCard>
+
+        <UCard>
+          <p class="text-xs font-medium text-muted">Total profit / Hit</p>
           <p class="mt-2 text-2xl font-semibold">
             <span
               :class="
@@ -375,6 +427,9 @@ async function runBacktest() {
               "
             >
               {{ summary ? summary.total_profit.toFixed(2) : '–' }}
+            </span>
+            <span class="text-xs font-normal text-muted ml-1">
+              {{ summary ? (summary.hit_rate * 100).toFixed(1) + '%' : '–' }}
             </span>
           </p>
         </UCard>
@@ -411,19 +466,9 @@ async function runBacktest() {
         </UCard>
       </div>
 
-      <div class="grid gap-6 lg:grid-cols-[minmax(0,1.5fr),minmax(0,1.2fr)]">
-        <!-- Markets + equity -->
+      <div class="grid gap-6 lg:grid-cols-[minmax(0,1.5fr),minmax(0,1fr)]">
+        <!-- Equity curve -->
         <div class="space-y-4">
-          <UCard>
-            <h3 class="mb-3 text-sm font-semibold">Per-market performance</h3>
-
-            <PerformanceTable
-              :data="markets"
-              :columns="marketColumns"
-              empty-message="Run a backtest to see per-market stats."
-            />
-          </UCard>
-
           <UCard>
             <h3 class="mb-3 text-sm font-semibold">Equity curve</h3>
             <EquityCurve :equity="equity" />

@@ -17,7 +17,8 @@ const form = reactive({
   min_bets: 300,
   bootstrap_n: 1000,
   stake: 1.0,
-  kelly_mult: 0.0
+  kelly_mult: 0.0,
+  selectionMode: 'best_ev'
 })
 
 const loading = ref(false)
@@ -37,7 +38,8 @@ async function runSweep() {
         stake: form.stake,
         kelly_mult: form.kelly_mult,
         min_bets: form.min_bets,
-        bootstrap_n: form.bootstrap_n
+        bootstrap_n: form.bootstrap_n,
+        selection_mode: form.selectionMode
       }
     })
     results.value = res.cells || []
@@ -79,6 +81,7 @@ function runSingleBacktest(cell: any) {
       minEv: cell.min_ev,
       stake: form.stake,
       kellyMult: form.kelly_mult,
+      selectionMode: form.selectionMode,
       autoRun: 'true'
     }
   })
@@ -87,6 +90,23 @@ function runSingleBacktest(cell: any) {
 const columns: TableColumn<any>[] = [
   { accessorKey: 'min_edge', header: 'Min Edge' },
   { accessorKey: 'min_ev', header: 'Min EV' },
+  {
+    accessorKey: 'pass_rate_top',
+    header: 'Pass Rate (Top)',
+    cell: ({ row }) => {
+      const v =
+        row.original.n_top_prob_passes_gate / row.original.n_all_valid || 0
+      return `${(v * 100).toFixed(1)}%`
+    }
+  },
+  {
+    accessorKey: 'pass_rate_any',
+    header: 'Pass Rate (Any)',
+    cell: ({ row }) => {
+      const v = row.original.n_any_passes_gate / row.original.n_all_valid || 0
+      return `${(v * 100).toFixed(1)}%`
+    }
+  },
   { accessorKey: 'bets', header: 'Bets' },
   {
     accessorKey: 'roi',
@@ -109,75 +129,91 @@ const columns: TableColumn<any>[] = [
     }
   },
   {
+    accessorKey: 'avg_ev',
+    header: 'Avg EV (placed)',
+    cell: ({ row }) => (row.getValue('avg_ev') as number)?.toFixed(3)
+  },
+  {
     accessorKey: 'avg_odds',
-    header: 'Avg Odds',
+    header: 'Avg Odds (placed)',
     cell: ({ row }) => (row.getValue('avg_odds') as number)?.toFixed(2)
   },
   {
     accessorKey: 'median_odds',
-    header: 'Med Odds',
+    header: 'Med Odds (placed)',
     cell: ({ row }) => (row.getValue('median_odds') as number)?.toFixed(2)
   },
   {
     accessorKey: 'p90_odds',
-    header: 'P90 Odds',
+    header: 'P90 Odds (placed)',
     cell: ({ row }) => (row.getValue('p90_odds') as number)?.toFixed(2)
   },
   {
-    accessorKey: 'pct_h',
-    header: '%H',
-    cell: ({ row }) =>
-      `${((row.getValue('pct_h') as number) * 100).toFixed(0)}%`
-  },
-  {
-    accessorKey: 'pct_d',
-    header: '%D',
-    cell: ({ row }) =>
-      `${((row.getValue('pct_d') as number) * 100).toFixed(0)}%`
-  },
-  {
-    accessorKey: 'pct_a',
-    header: '%A',
-    cell: ({ row }) =>
-      `${((row.getValue('pct_a') as number) * 100).toFixed(0)}%`
-  },
-  {
-    id: 'buckets',
-    header: 'Dist',
+    id: 'mixes',
+    header: 'Mixes',
     cell: ({ row }) => {
-      const buckets = row.original.odds_buckets || {}
+      const placed = row.original.stats_placed_bets?.mix || {}
+      const topValid = row.original.stats_all_valid?.mix || {}
+      const topGate = row.original.stats_top_passes_gate?.mix || {}
+
       return h(
         'UPopover',
         { mode: 'hover' },
         {
           default: () =>
             h('UButton', {
-              icon: 'i-lucide-bar-chart-2',
+              icon: 'i-lucide-pie-chart',
               size: 'xs',
-              variant: 'ghost'
+              variant: 'ghost',
+              label: `${(placed.home * 100).toFixed(0)}/${(placed.draw * 100).toFixed(0)}/${(placed.away * 100).toFixed(0)}%`
             }),
           content: () =>
-            h('div', { class: 'p-3 text-xs space-y-1 w-40' }, [
-              h(
-                'div',
-                { class: 'font-bold mb-2 border-b pb-1' },
-                'Odds Buckets'
-              ),
-              ...Object.entries(buckets).map(([k, v]) =>
+            h('div', { class: 'p-3 text-xs space-y-3 w-56' }, [
+              h('div', {}, [
+                h(
+                  'div',
+                  { class: 'font-bold border-b mb-1 pb-1' },
+                  'Placed Bets Mix'
+                ),
                 h('div', { class: 'flex justify-between' }, [
-                  h('span', { class: 'text-muted' }, `${k}:`),
-                  h('span', { class: 'font-medium' }, `${v} bets`)
+                  h('span', {}, `H: ${(placed.home * 100).toFixed(1)}%`),
+                  h('span', {}, `D: ${(placed.draw * 100).toFixed(1)}%`),
+                  h('span', {}, `A: ${(placed.away * 100).toFixed(1)}%`)
                 ])
-              )
+              ]),
+              h('div', {}, [
+                h(
+                  'div',
+                  { class: 'font-bold border-b mb-1 pb-1' },
+                  'Top-prob (all valid)'
+                ),
+                h('div', { class: 'flex justify-between' }, [
+                  h('span', {}, `H: ${(topValid.home * 100).toFixed(1)}%`),
+                  h('span', {}, `D: ${(topValid.draw * 100).toFixed(1)}%`),
+                  h('span', {}, `A: ${(topValid.away * 100).toFixed(1)}%`)
+                ])
+              ]),
+              h('div', {}, [
+                h(
+                  'div',
+                  { class: 'font-bold border-b mb-1 pb-1' },
+                  'Top-prob (passed gate)'
+                ),
+                h('div', { class: 'flex justify-between' }, [
+                  h('span', {}, `H: ${(topGate.home * 100).toFixed(1)}%`),
+                  h('span', {}, `D: ${(topGate.draw * 100).toFixed(1)}%`),
+                  h('span', {}, `A: ${(topGate.away * 100).toFixed(1)}%`)
+                ])
+              ])
             ])
         }
       )
     }
   },
   {
-    accessorKey: 'avg_ev',
-    header: 'Avg EV',
-    cell: ({ row }) => (row.getValue('avg_ev') as number)?.toFixed(3)
+    accessorKey: 'avg_edge',
+    header: 'Avg Edge',
+    cell: ({ row }) => (row.getValue('avg_edge') as number)?.toFixed(3)
   },
   {
     id: 'actions',
@@ -310,6 +346,16 @@ function getHeatmapColor(roi: number, bets: number) {
               />
             </div>
           </div>
+          <div class="space-y-2 flex flex-col">
+            <span class="text-xs font-medium">Selection Mode</span>
+            <USelect
+              v-model="form.selectionMode"
+              :items="[
+                { label: 'Best EV', value: 'best_ev' },
+                { label: 'Top Prob Only', value: 'top_prob_only' }
+              ]"
+            />
+          </div>
         </div>
 
         <div class="flex justify-end pt-2">
@@ -332,7 +378,7 @@ function getHeatmapColor(roi: number, bets: number) {
         variant="soft"
         color="primary"
         title="Loaded Sweep Results"
-        :description="`Showing results from ${sweepStats.start_date} to ${sweepStats.end_date}. Edge: ${sweepStats.edge_range?.[0]}-${sweepStats.edge_range?.[1]}, EV: ${sweepStats.ev_range?.[0]}-${sweepStats.ev_range?.[1]}. Min Bets: ${sweepStats.min_bets}`"
+        :description="`Showing results from ${sweepStats.start_date} to ${sweepStats.end_date}. Edge: ${sweepStats.edge_range?.[0]}-${sweepStats.edge_range?.[1]}, EV: ${sweepStats.ev_range?.[0]}-${sweepStats.ev_range?.[1]}. Mode: ${sweepStats.selection_mode || 'best_ev'}. Min Bets: ${sweepStats.min_bets}`"
         icon="i-lucide-info"
       />
 

@@ -48,22 +48,6 @@ def index_predictions(predictions: List[Dict[str, Any]]) -> Dict[int, Dict[str, 
         pred_by_id[mid] = r
     return pred_by_id
 
-def select_best_bet(metrics: List[Dict[str, Any]], min_edge: float, min_ev: float) -> Optional[Dict[str, Any]]:
-    """
-    Apply gating and pick the best bet (highest EV).
-    EV Definition (Canonical): EV = P_model * Odds - 1
-    Edge Definition: Edge = P_model - P_implied_normalized
-    """
-    valid_bets = [
-        m for m in metrics 
-        if m["edge"] >= min_edge and m["ev"] >= min_ev and m["odds"] > 1.0
-    ]
-    
-    if not valid_bets:
-        return None
-        
-    return max(valid_bets, key=lambda x: x["ev"])
-
 def compute_stake(stake_base: float, kelly_mult: float, prob: float, odds: float) -> float:
     """
     Compute stake amount based on flat or fractional Kelly.

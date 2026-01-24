@@ -4,9 +4,10 @@ import json
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 from .backtest_utils import (
-    build_df_bt, index_predictions, select_best_bet, 
+    build_df_bt, index_predictions, 
     compute_stake, compute_profit, get_actual_outcome
 )
+from .betting_logic import select_bet
 from .predict import predict_ft_1x2
 from .bootstrap import bootstrap_roi
 from dataset.cleaner import load_features
@@ -44,7 +45,9 @@ def run_backtest_sweep(
     kelly_mult: float = 0.0,
     min_bets: int = 300,
     bootstrap_n: int = 500,
-    max_ci_cells: int = 50
+    max_ci_cells: int = 50,
+    selection_mode: str = "best_ev",
+    debug: int = 0
 ) -> Dict[str, Any]:
     """
     Perform an optimized grid search over (min_edge, min_ev).
@@ -63,22 +66,38 @@ def run_backtest_sweep(
         return {"cells": [], "status": "No matches in window"}
 
     # Predict once
-    predictions = predict_ft_1x2(df_bt)
+    predictions = predict_ft_1x2(df_bt, debug=0) # sweep usually doesn't need debug rows per cell
     pred_by_id = index_predictions(predictions)
     
-    # Prepare all possible bets info per match
+    # Prepare all possible matches info
+    # ALL_VALID: pred present + actual present + valid odds + non-empty metrics
     processed_matches = []
+    n_total_all_valid = 0
+    
     for _, match_row in df_bt.iterrows():
         mid = int(match_row["match_id"])
         if mid not in pred_by_id: continue
         actual = get_actual_outcome(match_row)
         if actual is None: continue
+        
+        metrics = pred_by_id[mid]["metrics"]
+        if not metrics: continue # Invalid odds
+        
+        # Determine top-prob outcome once
+        top_metric = max(metrics, key=lambda x: x["prob"])
+        
         processed_matches.append({
             "id": mid,
             "date": match_row["match_date"],
             "actual": actual,
-            "metrics": pred_by_id[mid]["metrics"]
+            "metrics": metrics,
+            "top_outcome": top_metric["outcome"],
+            "top_odds": top_metric["odds"],
+            "top_prob": top_metric["prob"],
+            "top_edge": top_metric["edge"],
+            "top_ev": top_metric["ev"]
         })
+        n_total_all_valid += 1
     
     # Generate grid
     edges = np.round(np.arange(edge_range[0], edge_range[1] + 0.0001, edge_range[2]), 3)
@@ -89,8 +108,35 @@ def run_backtest_sweep(
     for me in edges:
         for mv in evs:
             bet_rows = []
+            n_any_passes_gate = 0
+            n_top_prob_passes_gate = 0
+            
+            # For distributions
+            group_all_valid = []
+            group_top_passes = []
+            
             for m in processed_matches:
-                best = select_best_bet(m["metrics"], me, mv)
+                # ALL_VALID is constant for all cells
+                group_all_valid.append({
+                    "outcome": m["top_outcome"],
+                    "odds": m["top_odds"]
+                })
+                
+                # Check gates
+                any_passes = any(met["edge"] >= me and met["ev"] >= mv and met["odds"] > 1.0 for met in m["metrics"])
+                if any_passes:
+                    n_any_passes_gate += 1
+
+                top_passes = (m["top_edge"] >= me and m["top_ev"] >= mv and m["top_odds"] > 1.0)
+                if top_passes:
+                    n_top_prob_passes_gate += 1
+                    group_top_passes.append({
+                        "outcome": m["top_outcome"],
+                        "odds": m["top_odds"]
+                    })
+                
+                # Selection logic
+                best = select_bet(m["metrics"], me, mv, selection_mode)
                 if not best: continue
                 
                 from .schema import CLASS_MAPPING
@@ -107,6 +153,7 @@ def run_backtest_sweep(
                     "odds": best["odds"],
                     "ev": best["ev"],
                     "edge": best["edge"],
+                    "prob": best["prob"],
                     "outcome": best["outcome"]
                 })
                 
@@ -122,22 +169,27 @@ def run_backtest_sweep(
             profit = bdf["profit"].sum()
             bets = len(bdf)
             
-            # Diagnostics
-            n_home = int((bdf["outcome"] == "home").sum())
-            n_draw = int((bdf["outcome"] == "draw").sum())
-            n_away = int((bdf["outcome"] == "away").sum())
-            
-            avg_odds_h = float(round(bdf[bdf["outcome"] == "home"]["odds"].mean(), 2)) if n_home > 0 else 0.0
-            avg_odds_d = float(round(bdf[bdf["outcome"] == "draw"]["odds"].mean(), 2)) if n_draw > 0 else 0.0
-            avg_odds_a = float(round(bdf[bdf["outcome"] == "away"]["odds"].mean(), 2)) if n_away > 0 else 0.0
+            # Distribution stats helper
+            def get_group_stats(rows, odds_key="odds", outcome_key="outcome"):
+                if not rows: return {"count": 0, "avg_odds": 0, "med_odds": 0, "p90_odds": 0, "mix": {"home": 0, "draw": 0, "away": 0}}
+                df_g = pd.DataFrame(rows)
+                n_g = len(df_g)
+                c_g = df_g[outcome_key].value_counts().to_dict()
+                return {
+                    "count": n_g,
+                    "avg_odds": float(round(df_g[odds_key].mean(), 2)),
+                    "med_odds": float(round(df_g[odds_key].median(), 2)),
+                    "p90_odds": float(round(df_g[odds_key].quantile(0.9), 2)),
+                    "mix": {
+                        "home": float(round(c_g.get("home", 0) / n_g, 3)),
+                        "draw": float(round(c_g.get("draw", 0) / n_g, 3)),
+                        "away": float(round(c_g.get("away", 0) / n_g, 3))
+                    }
+                }
 
-            odds_buckets = {
-                "1-2": int(((bdf["odds"] >= 1) & (bdf["odds"] < 2)).sum()),
-                "2-3": int(((bdf["odds"] >= 2) & (bdf["odds"] < 3)).sum()),
-                "3-4": int(((bdf["odds"] >= 3) & (bdf["odds"] < 4)).sum()),
-                "4-6": int(((bdf["odds"] >= 4) & (bdf["odds"] < 6)).sum()),
-                "6+":  int((bdf["odds"] >= 6).sum()),
-            }
+            stats_all_valid = get_group_stats(group_all_valid)
+            stats_top_passes = get_group_stats(group_top_passes)
+            stats_placed = get_group_stats(bet_rows, odds_key="odds", outcome_key="outcome")
 
             cell = {
                 "min_edge": float(me),
@@ -145,18 +197,26 @@ def run_backtest_sweep(
                 "bets": bets,
                 "roi": float(round(profit / staked, 4)) if staked > 0 else 0.0,
                 "profit": float(round(profit, 2)),
-                "avg_odds": float(round(bdf["odds"].mean(), 2)),
-                "median_odds": float(round(bdf["odds"].median(), 2)),
-                "p90_odds": float(round(bdf["odds"].quantile(0.9), 2)),
+                "avg_odds": stats_placed["avg_odds"],
+                "median_odds": stats_placed["med_odds"],
+                "p90_odds": stats_placed["p90_odds"],
                 "avg_ev": float(round(bdf["ev"].mean(), 4)),
+                "avg_edge": float(round(bdf["edge"].mean(), 4)),
                 "low_sample": bool(bets < min_bets),
-                # New diagnostics
-                "n_h": n_home, "n_d": n_draw, "n_a": n_away,
-                "pct_h": float(round(n_home / bets, 3)) if bets > 0 else 0.0,
-                "pct_d": float(round(n_draw / bets, 3)) if bets > 0 else 0.0,
-                "pct_a": float(round(n_away / bets, 3)) if bets > 0 else 0.0,
-                "avg_odds_h": avg_odds_h, "avg_odds_d": avg_odds_d, "avg_odds_a": avg_odds_a,
-                "odds_buckets": odds_buckets
+                
+                # NEW Diagnostics
+                "n_all_valid": n_total_all_valid,
+                "n_any_passes_gate": n_any_passes_gate,
+                "n_top_prob_passes_gate": n_top_prob_passes_gate,
+                
+                "stats_all_valid": stats_all_valid,
+                "stats_top_passes_gate": stats_top_passes,
+                "stats_placed_bets": stats_placed,
+                
+                # Backward compatibility for existing UI fields
+                "pct_h": stats_placed["mix"]["home"],
+                "pct_d": stats_placed["mix"]["draw"],
+                "pct_a": stats_placed["mix"]["away"],
             }
             
             cell["_raw_bdf"] = bdf 
@@ -189,7 +249,8 @@ def run_backtest_sweep(
             "start_date": str(resolved_start.date()),
             "end_date": str(resolved_end.date()),
             "stake": stake,
-            "kelly_mult": kelly_mult
+            "kelly_mult": kelly_mult,
+            "selection_mode": selection_mode
         }
     }
     
