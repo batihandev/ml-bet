@@ -8,6 +8,42 @@ PROCESSED_DIR = ROOT_DIR / "data" / "processed"
 
 MIN_MATCHES_PER_DIVISION = 300
 
+def _parse_match_date(series: pd.Series) -> pd.Series:
+    raw = series.astype("string").str.strip()
+    parsed_default = pd.to_datetime(raw, errors="coerce", dayfirst=False)
+    parsed_dayfirst = pd.to_datetime(raw, errors="coerce", dayfirst=True)
+    count_default = parsed_default.notna().sum()
+    count_dayfirst = parsed_dayfirst.notna().sum()
+
+    if count_dayfirst != count_default:
+        return parsed_dayfirst if count_dayfirst > count_default else parsed_default
+
+    # Tie-breaker: infer from dd/mm vs mm/dd patterns
+    parts = raw.str.extract(r'(?P<a>\d{1,2})[/-](?P<b>\d{1,2})[/-]\d{2,4}')
+    a = pd.to_numeric(parts["a"], errors="coerce")
+    b = pd.to_numeric(parts["b"], errors="coerce")
+    dayfirst_votes = ((a > 12) & (b <= 12)).sum()
+    monthfirst_votes = ((b > 12) & (a <= 12)).sum()
+    if dayfirst_votes > monthfirst_votes:
+        return parsed_dayfirst
+    if monthfirst_votes > dayfirst_votes:
+        return parsed_default
+
+    return parsed_default
+
+def _parse_match_time(series: pd.Series) -> pd.Series:
+    raw = series.astype("string").str.strip()
+    time_delta = pd.to_timedelta(raw, errors="coerce")
+    if time_delta.isna().all():
+        time_dt = pd.to_datetime(raw, errors="coerce")
+        seconds = (
+            time_dt.dt.hour.fillna(0).astype(int) * 3600
+            + time_dt.dt.minute.fillna(0).astype(int) * 60
+            + time_dt.dt.second.fillna(0).astype(int)
+        )
+        time_delta = pd.to_timedelta(seconds, unit="s")
+    return time_delta
+
 def load_raw_matches() -> pd.DataFrame:
     matches_path = RAW_DIR / "Matches.csv"
     if not matches_path.exists():
@@ -39,7 +75,19 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     if "division" in df.columns:
         df["division"] = df["division"].astype("string").str.strip()
     if "match_date" in df.columns:
-        df["match_date"] = pd.to_datetime(df["match_date"], errors="coerce")
+        df["match_date"] = _parse_match_date(df["match_date"])
+        df["match_date"] = df["match_date"].dt.normalize()
+    if "match_time" in df.columns:
+        df["match_time"] = df["match_time"].astype("string").str.strip()
+        time_delta = _parse_match_time(df["match_time"])
+    else:
+        time_delta = None
+
+    if "match_date" in df.columns:
+        if time_delta is not None:
+            df["match_datetime"] = df["match_date"] + time_delta.fillna(pd.Timedelta(0))
+        else:
+            df["match_datetime"] = df["match_date"]
 
     numeric_cols = [
         "home_elo", "away_elo", "form3_home", "form5_home", "form3_away", "form5_away",
@@ -56,7 +104,8 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     if "match_date" in df.columns:
-        df = df.sort_values("match_date")
+        sort_cols = ["match_datetime", "match_date"] if "match_datetime" in df.columns else ["match_date"]
+        df = df.sort_values(sort_cols)
     return df
 
 def filter_matches(df: pd.DataFrame) -> pd.DataFrame:

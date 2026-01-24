@@ -100,10 +100,10 @@ def add_draw_closeness_features(df: pd.DataFrame) -> pd.DataFrame:
              if ppg_gap_name in df.columns:
                  continue
                  
-             h_win = pd.to_numeric(df[home_win_col], errors="coerce").fillna(0)
-             h_draw = pd.to_numeric(df[home_draw_col], errors="coerce").fillna(0)
-             a_win = pd.to_numeric(df[away_win_col], errors="coerce").fillna(0)
-             a_draw = pd.to_numeric(df[away_draw_col], errors="coerce").fillna(0)
+             h_win = pd.to_numeric(df[home_win_col], errors="coerce")
+             h_draw = pd.to_numeric(df[home_draw_col], errors="coerce")
+             a_win = pd.to_numeric(df[away_win_col], errors="coerce")
+             a_draw = pd.to_numeric(df[away_draw_col], errors="coerce")
              
              home_ppg = 3 * h_win + 1 * h_draw
              away_ppg = 3 * a_win + 1 * a_draw

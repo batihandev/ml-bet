@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from .base import _cmp_int_or_nan, _and_int_or_nan
+from .base import _cmp_int_or_nan, _and_int_or_nan, ensure_match_datetime
 
 FORM_WINDOWS = [3, 5, 10]
 
@@ -13,19 +13,15 @@ def build_team_history(df: pd.DataFrame) -> pd.DataFrame:
         df["match_id"] = range(len(df))
 
     df["match_date"] = pd.to_datetime(df["match_date"], errors="coerce")
+    df = ensure_match_datetime(df)
+    order_col = "match_datetime" if "match_datetime" in df.columns else "match_date"
+
+    base_cols = ["match_id", "match_date", "home_team", "ht_home_goals", "ht_away_goals", "ft_home_goals", "ft_away_goals"]
+    if order_col not in base_cols:
+        base_cols.insert(2, order_col)
 
     # home rows
-    home = df[
-        [
-            "match_id",
-            "match_date",
-            "home_team",
-            "ht_home_goals",
-            "ht_away_goals",
-            "ft_home_goals",
-            "ft_away_goals",
-        ]
-    ].copy()
+    home = df[base_cols].copy()
     home["team"] = home["home_team"]
     home["is_home"] = 1
     home["gf_ht"] = home["ht_home_goals"]
@@ -33,18 +29,12 @@ def build_team_history(df: pd.DataFrame) -> pd.DataFrame:
     home["gf_ft"] = home["ft_home_goals"]
     home["ga_ft"] = home["ft_away_goals"]
 
+    away_cols = ["match_id", "match_date", "away_team", "ht_home_goals", "ht_away_goals", "ft_home_goals", "ft_away_goals"]
+    if order_col not in away_cols:
+        away_cols.insert(2, order_col)
+
     # away rows
-    away = df[
-        [
-            "match_id",
-            "match_date",
-            "away_team",
-            "ht_home_goals",
-            "ht_away_goals",
-            "ft_home_goals",
-            "ft_away_goals",
-        ]
-    ].copy()
+    away = df[away_cols].copy()
     away["team"] = away["away_team"]
     away["is_home"] = 0
     away["gf_ht"] = away["ht_away_goals"]
@@ -62,15 +52,15 @@ def build_team_history(df: pd.DataFrame) -> pd.DataFrame:
     team_matches["ft_draw_flag"] = _cmp_int_or_nan(team_matches["gf_ft"], team_matches["ga_ft"], "==")
     team_matches["htd_ft_win"] = _and_int_or_nan(team_matches["ht_draw"], team_matches["ft_win"])
 
-    team_matches = team_matches.sort_values(["team", "match_date", "match_id"]).reset_index(drop=True)
+    team_matches = team_matches.sort_values(["team", order_col, "match_date", "match_id"]).reset_index(drop=True)
 
     def compute_rolling(group: pd.DataFrame) -> pd.DataFrame:
-        group = group.sort_values(["match_date", "match_id"]).reset_index(drop=True)
+        group = group.sort_values([order_col, "match_date", "match_id"]).reset_index(drop=True)
         if "team" not in group.columns:
             group["team"] = group.name
-        group["days_since_last"] = group["match_date"].diff().dt.days.shift(1)
+        group["days_since_last"] = group[order_col].diff().dt.days
 
-        dates = group["match_date"].values
+        dates = group[order_col].values
         for window_days, colname in [
             (7, "matches_last_7d"),
             (14, "matches_last_14d"),
@@ -123,11 +113,7 @@ def build_team_history(df: pd.DataFrame) -> pd.DataFrame:
 
         return group
 
-    try:
-        team_matches = team_matches.groupby("team", group_keys=False).apply(compute_rolling, include_groups=False)
-    except TypeError:
-        # Older pandas versions don't support include_groups.
-        team_matches = team_matches.groupby("team", group_keys=False).apply(compute_rolling)
+    team_matches = team_matches.groupby("team", group_keys=False).apply(compute_rolling)
     return team_matches
 
 def merge_team_features(matches: pd.DataFrame, team_matches: pd.DataFrame) -> pd.DataFrame:

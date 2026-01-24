@@ -315,7 +315,9 @@ async function runBacktest() {
                 v-model="form.selectionMode"
                 :items="[
                   { label: 'Best EV', value: 'best_ev' },
-                  { label: 'Top Prob Only', value: 'top_prob_only' }
+                  { label: 'Top Prob', value: 'top_prob' },
+                  { label: 'Top Prob Only', value: 'top_prob_only' },
+                  { label: 'Top Prob Always', value: 'top_prob_always' }
                 ]"
               />
             </UFormField>

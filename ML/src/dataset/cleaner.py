@@ -124,17 +124,7 @@ def clean_training_data(df: pd.DataFrame, feature_cols: List[str], target_col: s
     # Data-driven history filter
     # Instead of dropping if ANY rolling feature is NaN, require a minimum % of them.
     # This prevents dropping rows that just miss one specific deep history feature (e.g. form10) but have form3.
-    rolling_cols = [c for c in feature_cols if "form" in c or c.startswith("h2h_")]
-    if rolling_cols:
-        # User Fix #7: min_non_null_history = max(1, int(0.20 * len(rolling_cols)))
-        min_k = max(1, int(0.20 * len(rolling_cols)))
-        valid_history_mask = df[rolling_cols].notna().sum(axis=1) >= min_k
-        
-        dropped_count = (~valid_history_mask).sum()
-        if dropped_count > 0:
-            print(f"Dropping {dropped_count} rows due to insufficient history (threshold < {min_k} valid cols)")
-            
-        df = df[valid_history_mask].copy()
+    df = filter_insufficient_history(df, feature_cols)
     
     X = df[feature_cols].copy().fillna(0.0)
     y = df[target_col].astype(int).values
@@ -142,3 +132,22 @@ def clean_training_data(df: pd.DataFrame, feature_cols: List[str], target_col: s
     
     return X[train_mask], X[val_mask], y[train_mask], y[val_mask], feature_cols
 
+def filter_insufficient_history(
+    df: pd.DataFrame,
+    feature_cols: List[str],
+    min_history_frac: float = 0.20
+) -> pd.DataFrame:
+    """
+    Drop rows with too little rolling history (form/h2h).
+    """
+    rolling_cols = [c for c in feature_cols if "form" in c or c.startswith("h2h_")]
+    if not rolling_cols:
+        return df
+    min_k = max(1, int(min_history_frac * len(rolling_cols)))
+    valid_history_mask = df[rolling_cols].notna().sum(axis=1) >= min_k
+
+    dropped_count = (~valid_history_mask).sum()
+    if dropped_count > 0:
+        print(f"Dropping {dropped_count} rows due to insufficient history (threshold < {min_k} valid cols)")
+
+    return df[valid_history_mask].copy()

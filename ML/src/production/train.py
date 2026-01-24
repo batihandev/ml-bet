@@ -4,10 +4,8 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.frozen import FrozenEstimator
-from sklearn.metrics import classification_report, accuracy_score, brier_score_loss
-from sklearn.calibration import CalibratedClassifierCV
-from dataset.cleaner import clean_training_data, select_feature_columns
+from sklearn.metrics import classification_report, accuracy_score
+from dataset.cleaner import select_feature_columns, filter_insufficient_history
 from .schema import TARGET_COL, CLASS_MAPPING
 from .utils import build_time_folds, ProbabilityCalibrator
 
@@ -67,6 +65,9 @@ def train_production_model(
     
     # Filter rows where target is missing
     df = df[~df[TARGET_COL].isna()].copy()
+
+    # Enforce minimum rolling history (consistent with cleaner)
+    df = filter_insufficient_history(df, feature_cols)
     
     # Enforce date windows
     t_start_dt = pd.to_datetime(train_start) if train_start else df["match_date"].min()

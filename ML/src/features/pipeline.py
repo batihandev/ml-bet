@@ -1,5 +1,5 @@
 import pandas as pd
-from .base import PROCESSED_DIR, load_processed_matches, add_basic_targets, add_league_context
+from .base import PROCESSED_DIR, load_processed_matches, add_basic_targets, add_league_context, ensure_match_datetime
 from .history import build_team_history, merge_team_features
 from .h2h import add_h2h_features, N_H2H
 from .market import add_attack_strength, add_odds_features, add_rule_scores
@@ -14,7 +14,9 @@ def build_features(df_matches: pd.DataFrame) -> pd.DataFrame:
     if "match_id" not in df.columns:
         df["match_id"] = range(len(df))
 
-    df = df.sort_values(["match_date", "match_id"]).reset_index(drop=True)
+    df = ensure_match_datetime(df)
+    sort_cols = ["match_datetime", "match_date", "match_id"] if "match_datetime" in df.columns else ["match_date", "match_id"]
+    df = df.sort_values(sort_cols).reset_index(drop=True)
 
     df = add_basic_targets(df)
     df = add_league_context(df)
@@ -60,4 +62,3 @@ def run_build_features_process():
 
 if __name__ == "__main__":
     run_build_features_process()
-

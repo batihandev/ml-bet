@@ -97,6 +97,29 @@ function openDetails(cell: any) {
   detailsOpen.value = true
 }
 
+const getTopPasses = (cell: any) =>
+  cell?.n_top_prob_passes_gate ?? cell?.n_top_choice_value ?? 0
+const getAnyPasses = (cell: any) =>
+  cell?.n_any_passes_gate ?? cell?.n_any_outcome_value ?? 0
+
+const formatPercent = (num?: number, denom?: number) => {
+  if (!denom || !Number.isFinite(num) || !Number.isFinite(denom)) return '–'
+  return `${((num / denom) * 100).toFixed(1)}%`
+}
+
+const formatMix = (mix?: { home?: number; draw?: number; away?: number }) => {
+  if (!mix) return '–'
+  const { home, draw, away } = mix
+  if (
+    !Number.isFinite(home) ||
+    !Number.isFinite(draw) ||
+    !Number.isFinite(away)
+  ) {
+    return '–'
+  }
+  return `${(home * 100).toFixed(1)}% H / ${(draw * 100).toFixed(1)}% D / ${(away * 100).toFixed(1)}% A`
+}
+
 const topResults = computed(() => {
   if (showAllRows.value) return results.value
   return results.value.slice(0, 8)
@@ -143,9 +166,9 @@ const columns: TableColumn<any>[] = [
     accessorKey: 'pass_rate_top',
     header: 'Pass Rate (Top)',
     cell: ({ row }) => {
-      const v =
-        row.original.n_top_prob_passes_gate / row.original.n_all_valid || 0
-      return `${(v * 100).toFixed(1)}%`
+      const top = getTopPasses(row.original)
+      const total = row.original.n_all_valid || 0
+      return formatPercent(top, total)
     }
   },
   {
@@ -175,8 +198,8 @@ const matrix = computed(() => {
     (a, b) => a - b
   )
   const evs = [...new Set(results.value.map((c) => c.min_ev))].sort(
-    (a, b) => b - a
-  ) // top to bottom
+    (a, b) => a - b
+  ) // start from 0
 
   const grid = evs.map((ev) => {
     return {
@@ -287,7 +310,9 @@ function getHeatmapColor(roi: number, bets: number) {
               v-model="form.selectionMode"
               :items="[
                 { label: 'Best EV', value: 'best_ev' },
-                { label: 'Top Prob Only', value: 'top_prob_only' }
+                { label: 'Top Prob', value: 'top_prob' },
+                { label: 'Top Prob Only', value: 'top_prob_only' },
+                { label: 'Top Prob Always', value: 'top_prob_always' }
               ]"
             />
           </div>
@@ -313,7 +338,7 @@ function getHeatmapColor(roi: number, bets: number) {
         variant="soft"
         color="primary"
         title="Loaded Sweep Results"
-        :description="`Showing results from ${sweepStats.start_date} to ${sweepStats.end_date}. Edge: ${sweepStats.edge_range?.[0]}-${sweepStats.edge_range?.[1]}, EV: ${sweepStats.ev_range?.[0]}-${sweepStats.ev_range?.[1]}. Mode: ${sweepStats.selection_mode || 'best_ev'}. Min Bets: ${sweepStats.min_bets}`"
+        :description="`Showing results from ${sweepStats.start_date} to ${sweepStats.end_date}. Edge: ${sweepStats.edge_range?.[0]}-${sweepStats.edge_range?.[1]}, EV: ${sweepStats.ev_range?.[0]}-${sweepStats.ev_range?.[1]}. Mode: ${sweepStats.selection_mode}. Min Bets: ${sweepStats.min_bets}`"
         icon="i-lucide-info"
       />
 
@@ -449,7 +474,7 @@ function getHeatmapColor(roi: number, bets: number) {
                   <span class="text-muted">
                     (p05:
                     {{
-                      selectedCell.roi_p05
+                      selectedCell.roi_p05 != null
                         ? (selectedCell.roi_p05 * 100).toFixed(2)
                         : '–'
                     }}%)
@@ -474,26 +499,24 @@ function getHeatmapColor(roi: number, bets: number) {
               >
                 <p class="text-[10px] uppercase text-muted">Pass Rates</p>
                 <p>
-                  Top-prob:
+                  Top choice has value:
                   {{
-                    (
-                      (selectedCell.n_top_prob_passes_gate /
-                        (selectedCell.n_all_valid || 1)) *
-                      100
-                    ).toFixed(1)
-                  }}%
+                    formatPercent(
+                      getTopPasses(selectedCell),
+                      selectedCell.n_all_valid
+                    )
+                  }}
                 </p>
                 <p>
-                  Any outcome:
+                  Any outcome has value:
                   {{
-                    (
-                      (selectedCell.n_any_passes_gate /
-                        (selectedCell.n_all_valid || 1)) *
-                      100
-                    ).toFixed(1)
-                  }}%
+                    formatPercent(
+                      getAnyPasses(selectedCell),
+                      selectedCell.n_all_valid
+                    )
+                  }}
                 </p>
-                <p>All valid: {{ selectedCell.n_all_valid_matches }}</p>
+                <p>Total matches: {{ selectedCell.n_all_valid }}</p>
               </div>
             </div>
 
@@ -521,28 +544,32 @@ function getHeatmapColor(roi: number, bets: number) {
               <div
                 class="rounded-lg border border-gray-200/60 p-3 dark:border-gray-800/80"
               >
-                <p class="text-[10px] uppercase text-muted">Bet mixes</p>
+                <p class="text-[10px] uppercase text-muted">Outcome Mixtures</p>
                 <p>
-                  Placed:
+                  Placed bets:
                   <span class="text-emerald-200">
-                    {{
-                      `${(selectedCell.stats_placed_bets?.mix?.home * 100).toFixed(1)}% H / ${(selectedCell.stats_placed_bets?.mix?.draw * 100).toFixed(1)}% D / ${(selectedCell.stats_placed_bets?.mix?.away * 100).toFixed(1)}% A`
-                    }}
+                    {{ formatMix(selectedCell.stats_placed_bets?.mix) }}
                   </span>
                 </p>
                 <p>
-                  Top valid:
+                  All top choices:
                   <span class="text-sky-200">
                     {{
-                      `${(selectedCell.stats_top_prob_all_valid?.mix?.home * 100).toFixed(1)}% H / ${(selectedCell.stats_top_prob_all_valid?.mix?.draw * 100).toFixed(1)}% D / ${(selectedCell.stats_top_prob_all_valid?.mix?.away * 100).toFixed(1)}% A`
+                      formatMix(
+                        selectedCell.stats_top_prob_all_valid?.mix ??
+                          selectedCell.stats_baseline_top_choice?.mix
+                      )
                     }}
                   </span>
                 </p>
                 <p>
-                  Top passed:
+                  Top choices with value:
                   <span class="text-amber-200">
                     {{
-                      `${(selectedCell.stats_top_passes_gate?.mix?.home * 100).toFixed(1)}% H / ${(selectedCell.stats_top_passes_gate?.mix?.draw * 100).toFixed(1)}% D / ${(selectedCell.stats_top_passes_gate?.mix?.away * 100).toFixed(1)}% A`
+                      formatMix(
+                        selectedCell.stats_top_passes_gate?.mix ??
+                          selectedCell.stats_value_top_choice?.mix
+                      )
                     }}
                   </span>
                 </p>
@@ -555,16 +582,16 @@ function getHeatmapColor(roi: number, bets: number) {
               <p class="text-[10px] uppercase text-muted">Diagnostics</p>
               <div class="grid gap-2 sm:grid-cols-3">
                 <div>
-                  <p class="text-[10px] text-muted">All valid</p>
+                  <p class="text-[10px] text-muted">Eligible matches</p>
                   <p>{{ selectedCell.n_all_valid }}</p>
                 </div>
                 <div>
-                  <p class="text-[10px] text-muted">Top pass</p>
-                  <p>{{ selectedCell.n_top_prob_passes_gate }}</p>
+                  <p class="text-[10px] text-muted">Top choice has value</p>
+                  <p>{{ getTopPasses(selectedCell) }}</p>
                 </div>
                 <div>
-                  <p class="text-[10px] text-muted">Any pass</p>
-                  <p>{{ selectedCell.n_any_passes_gate }}</p>
+                  <p class="text-[10px] text-muted">Any outcome has value</p>
+                  <p>{{ getAnyPasses(selectedCell) }}</p>
                 </div>
               </div>
               <p class="mt-2 text-[10px] text-muted">

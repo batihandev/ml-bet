@@ -16,7 +16,7 @@ from .backtest_utils import (
     compute_kelly_fraction,
     compute_max_drawdown
 )
-from .betting_logic import select_bet
+from .betting_logic import select_bet, metric_passes_gate
 from .bootstrap import bootstrap_roi
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -151,12 +151,12 @@ def backtest_production_1x2(
         })
 
         # ANY_PASSES_GATE check
-        any_passes = any(m["edge"] >= min_edge and m["ev"] >= min_ev and m["odds"] > 1.0 for m in metrics)
+        any_passes = any(metric_passes_gate(m, min_edge, min_ev, selection_mode) for m in metrics)
         if any_passes:
             n_any_passes_gate += 1
 
         # TOP_PASSES_GATE check
-        top_passes = (top_metric["edge"] >= min_edge and top_metric["ev"] >= min_ev and top_metric["odds"] > 1.0)
+        top_passes = metric_passes_gate(top_metric, min_edge, min_ev, selection_mode)
         if top_passes:
             n_top_prob_passes_gate += 1
             group_top_prob_passes_gate.append({
@@ -258,8 +258,8 @@ def backtest_production_1x2(
             "total_labeled_matches": total_labeled_matches,
             "n_all_valid": stats_all_valid["count"],
             "n_all_valid_matches": stats_all_valid["count"],
-            "n_any_passes_gate": n_any_passes_gate,
-            "n_top_prob_passes_gate": n_top_prob_passes_gate,
+            "n_any_outcome_value": n_any_passes_gate,
+            "n_top_choice_value": n_top_prob_passes_gate,
             "skipped_missing_pred": skipped_missing_pred,
             "skipped_invalid_odds": skipped_invalid_odds,
             "skipped_no_value": skipped_no_value,
@@ -271,9 +271,8 @@ def backtest_production_1x2(
             "avg_edge": 0.0,
             "avg_ev": 0.0,
             "avg_selected_prob": 0.0,
-            "stats_all_valid": stats_all_valid,
-            "stats_top_prob_all_valid": stats_all_valid,
-            "stats_top_passes_gate": stats_top_passes,
+            "stats_baseline_top_choice": stats_all_valid,
+            "stats_value_top_choice": stats_top_passes,
             "stats_placed_bets": stats_placed,
             "outcome_mix": stats_placed["mix"],
             "all_valid_definition": all_valid_definition,
@@ -341,8 +340,8 @@ def backtest_production_1x2(
         "total_labeled_matches": total_labeled_matches,
         "n_all_valid": stats_all_valid["count"],
         "n_all_valid_matches": stats_all_valid["count"],
-        "n_any_passes_gate": n_any_passes_gate,
-        "n_top_prob_passes_gate": n_top_prob_passes_gate,
+        "n_any_outcome_value": n_any_passes_gate,
+        "n_top_choice_value": n_top_prob_passes_gate,
         "total_bets": total_bets,
         "total_staked": float(round(total_staked, 2)),
         "total_profit": float(round(total_profit, 2)),
@@ -353,9 +352,8 @@ def backtest_production_1x2(
         "avg_ev": float(round(avg_ev, 4)),
         "avg_selected_prob": float(round(avg_prob, 4)),
         
-        "stats_all_valid": stats_all_valid,
-        "stats_top_prob_all_valid": stats_all_valid,
-        "stats_top_passes_gate": stats_top_passes,
+        "stats_baseline_top_choice": stats_all_valid,
+        "stats_value_top_choice": stats_top_passes,
         "stats_placed_bets": stats_placed,
         
         "outcome_mix": stats_placed["mix"],  # Keep for backward compatibility

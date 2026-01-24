@@ -16,6 +16,7 @@ __pycache__/
 # data artifacts
 data/raw/*
 data/processed/*
+data/backtest_sweep_latest.json
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 

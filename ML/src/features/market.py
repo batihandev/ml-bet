@@ -1,18 +1,21 @@
 import numpy as np
 import pandas as pd
+from .base import ensure_match_datetime, infer_season_year
 
 def add_attack_strength(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["match_date"] = pd.to_datetime(df["match_date"], errors="coerce")
     if "season" not in df.columns:
-        df["season"] = df["match_date"].dt.year
+        df["season"] = infer_season_year(df["match_date"])
 
     df["ft_home_goals"] = pd.to_numeric(df["ft_home_goals"], errors="coerce")
     df["ft_away_goals"] = pd.to_numeric(df["ft_away_goals"], errors="coerce")
 
     if "match_id" not in df.columns:
         df["match_id"] = range(len(df))
-    df = df.sort_values(["division", "season", "match_date", "match_id"]).reset_index(drop=True)
+    df = ensure_match_datetime(df)
+    sort_cols = ["division", "season", "match_datetime", "match_date", "match_id"] if "match_datetime" in df.columns else ["division", "season", "match_date", "match_id"]
+    df = df.sort_values(sort_cols).reset_index(drop=True)
 
     df["league_avg_home_goals_prev"] = (
         df.groupby(["division", "season"])["ft_home_goals"]

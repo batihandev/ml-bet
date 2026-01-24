@@ -7,7 +7,7 @@ from .backtest_utils import (
     build_df_bt, index_predictions, 
     compute_stake, compute_profit, get_actual_outcome, compute_kelly_fraction
 )
-from .betting_logic import select_bet
+from .betting_logic import select_bet, metric_passes_gate
 from .predict import predict_ft_1x2
 from .bootstrap import bootstrap_roi
 from dataset.cleaner import load_features
@@ -130,11 +130,16 @@ def run_backtest_sweep(
                 })
                 
                 # Check gates
-                any_passes = any(met["edge"] >= me and met["ev"] >= mv and met["odds"] > 1.0 for met in m["metrics"])
+                any_passes = any(metric_passes_gate(met, me, mv, selection_mode) for met in m["metrics"])
                 if any_passes:
                     n_any_passes_gate += 1
 
-                top_passes = (m["top_edge"] >= me and m["top_ev"] >= mv and m["top_odds"] > 1.0)
+                top_passes = metric_passes_gate(
+                    {"edge": m["top_edge"], "ev": m["top_ev"], "odds": m["top_odds"]},
+                    me,
+                    mv,
+                    selection_mode
+                )
                 if top_passes:
                     n_top_prob_passes_gate += 1
                     group_top_prob_passes_gate.append({
