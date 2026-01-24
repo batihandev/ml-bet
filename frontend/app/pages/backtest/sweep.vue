@@ -58,26 +58,7 @@ async function fetchLatestSweep() {
       results.value = res.cells
       sweepStats.value = res.summary || {}
 
-      // Update form to match latest results
-      if (res.summary) {
-        if (res.summary.start_date) form.startDate = res.summary.start_date
-        if (res.summary.end_date) form.endDate = res.summary.end_date
-        if (res.summary.edge_range) {
-          form.edgeStart = res.summary.edge_range[0]
-          form.edgeEnd = res.summary.edge_range[1]
-          form.edgeStep = res.summary.edge_range[2]
-        }
-        if (res.summary.ev_range) {
-          form.evStart = res.summary.ev_range[0]
-          form.evEnd = res.summary.ev_range[1]
-          form.evStep = res.summary.ev_range[2]
-        }
-        if (res.summary.stake !== undefined) form.stake = res.summary.stake
-        if (res.summary.kelly_mult !== undefined)
-          form.kelly_mult = res.summary.kelly_mult
-        if (res.summary.min_bets !== undefined)
-          form.min_bets = res.summary.min_bets
-      }
+      // Form values are preserved as defaults, results are loaded separately
     }
   } catch (err) {
     console.error('Failed to fetch latest sweep', err)
@@ -131,6 +112,67 @@ const columns: TableColumn<any>[] = [
     accessorKey: 'avg_odds',
     header: 'Avg Odds',
     cell: ({ row }) => (row.getValue('avg_odds') as number)?.toFixed(2)
+  },
+  {
+    accessorKey: 'median_odds',
+    header: 'Med Odds',
+    cell: ({ row }) => (row.getValue('median_odds') as number)?.toFixed(2)
+  },
+  {
+    accessorKey: 'p90_odds',
+    header: 'P90 Odds',
+    cell: ({ row }) => (row.getValue('p90_odds') as number)?.toFixed(2)
+  },
+  {
+    accessorKey: 'pct_h',
+    header: '%H',
+    cell: ({ row }) =>
+      `${((row.getValue('pct_h') as number) * 100).toFixed(0)}%`
+  },
+  {
+    accessorKey: 'pct_d',
+    header: '%D',
+    cell: ({ row }) =>
+      `${((row.getValue('pct_d') as number) * 100).toFixed(0)}%`
+  },
+  {
+    accessorKey: 'pct_a',
+    header: '%A',
+    cell: ({ row }) =>
+      `${((row.getValue('pct_a') as number) * 100).toFixed(0)}%`
+  },
+  {
+    id: 'buckets',
+    header: 'Dist',
+    cell: ({ row }) => {
+      const buckets = row.original.odds_buckets || {}
+      return h(
+        'UPopover',
+        { mode: 'hover' },
+        {
+          default: () =>
+            h('UButton', {
+              icon: 'i-lucide-bar-chart-2',
+              size: 'xs',
+              variant: 'ghost'
+            }),
+          content: () =>
+            h('div', { class: 'p-3 text-xs space-y-1 w-40' }, [
+              h(
+                'div',
+                { class: 'font-bold mb-2 border-b pb-1' },
+                'Odds Buckets'
+              ),
+              ...Object.entries(buckets).map(([k, v]) =>
+                h('div', { class: 'flex justify-between' }, [
+                  h('span', { class: 'text-muted' }, `${k}:`),
+                  h('span', { class: 'font-medium' }, `${v} bets`)
+                ])
+              )
+            ])
+        }
+      )
+    }
   },
   {
     accessorKey: 'avg_ev',
@@ -283,71 +325,85 @@ function getHeatmapColor(roi: number, bets: number) {
       </UForm>
     </UCard>
 
-    <div v-if="matrix" class="grid gap-6 lg:grid-cols-2">
-      <!-- Heatmap Grid -->
-      <UCard>
-        <template #header>
-          <div class="flex items-center justify-between">
-            <h3 class="text-sm font-semibold">Heatmap: ROI (%)</h3>
-            <span class="text-[10px] text-muted">X=Edge, Y=EV</span>
+    <div v-if="matrix" class="space-y-6">
+      <!-- Last Run Summary -->
+      <UAlert
+        v-if="sweepStats"
+        variant="soft"
+        color="primary"
+        title="Loaded Sweep Results"
+        :description="`Showing results from ${sweepStats.start_date} to ${sweepStats.end_date}. Edge: ${sweepStats.edge_range?.[0]}-${sweepStats.edge_range?.[1]}, EV: ${sweepStats.ev_range?.[0]}-${sweepStats.ev_range?.[1]}. Min Bets: ${sweepStats.min_bets}`"
+        icon="i-lucide-info"
+      />
+
+      <div class="grid gap-6 lg:grid-cols-2">
+        <!-- Heatmap Grid -->
+        <UCard>
+          <template #header>
+            <div class="flex items-center justify-between">
+              <h3 class="text-sm font-semibold">Heatmap: ROI (%)</h3>
+              <span class="text-[10px] text-muted">X=Edge, Y=EV</span>
+            </div>
+          </template>
+
+          <div class="overflow-x-auto">
+            <table class="w-full border-collapse text-[11px] min-w-[400px]">
+              <thead>
+                <tr>
+                  <th class="p-1 border bg-gray-50 dark:bg-gray-900">
+                    EV \ Eg
+                  </th>
+                  <th
+                    v-for="e in matrix.edges"
+                    :key="e"
+                    class="p-1 border bg-gray-50 dark:bg-gray-900 w-12 text-center"
+                  >
+                    {{ e }}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in matrix.grid" :key="row.ev">
+                  <td
+                    class="p-1 border font-medium bg-gray-50 dark:bg-gray-900 text-right"
+                  >
+                    {{ row.ev }}
+                  </td>
+                  <td
+                    v-for="(cell, idx) in row.cols"
+                    :key="idx"
+                    class="p-1 border text-center cursor-pointer hover:ring-2 ring-primary-500 ring-inset transition-all"
+                    :class="getHeatmapColor(cell?.roi ?? 0, cell?.bets ?? 0)"
+                    @click="cell && runSingleBacktest(cell)"
+                  >
+                    <div v-if="cell">
+                      {{ (cell.roi * 100).toFixed(0) }}%
+                      <div class="text-[8px] opacity-70">{{ cell.bets }}</div>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-        </template>
+        </UCard>
 
-        <div class="overflow-x-auto">
-          <table class="w-full border-collapse text-[11px] min-w-[400px]">
-            <thead>
-              <tr>
-                <th class="p-1 border bg-gray-50 dark:bg-gray-900">EV \ Eg</th>
-                <th
-                  v-for="e in matrix.edges"
-                  :key="e"
-                  class="p-1 border bg-gray-50 dark:bg-gray-900 w-12 text-center"
-                >
-                  {{ e }}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in matrix.grid" :key="row.ev">
-                <td
-                  class="p-1 border font-medium bg-gray-50 dark:bg-gray-900 text-right"
-                >
-                  {{ row.ev }}
-                </td>
-                <td
-                  v-for="(cell, idx) in row.cols"
-                  :key="idx"
-                  class="p-1 border text-center cursor-pointer hover:ring-2 ring-primary-500 ring-inset transition-all"
-                  :class="getHeatmapColor(cell?.roi ?? 0, cell?.bets ?? 0)"
-                  @click="cell && runSingleBacktest(cell)"
-                >
-                  <div v-if="cell">
-                    {{ (cell.roi * 100).toFixed(0) }}%
-                    <div class="text-[8px] opacity-70">{{ cell.bets }}</div>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </UCard>
+        <!-- Sortable Ranking -->
+        <UCard>
+          <template #header>
+            <div class="flex items-center justify-between">
+              <h3 class="text-sm font-semibold">Top Performers</h3>
+              <span class="text-[10px] text-muted">Sorted by ROI (p05)</span>
+            </div>
+          </template>
 
-      <!-- Sortable Ranking -->
-      <UCard>
-        <template #header>
-          <div class="flex items-center justify-between">
-            <h3 class="text-sm font-semibold">Top Performers</h3>
-            <span class="text-[10px] text-muted">Sorted by ROI (p05)</span>
-          </div>
-        </template>
-
-        <UTable
-          :data="results"
-          :columns="columns"
-          class="w-full"
-          :loading="loading"
-        />
-      </UCard>
+          <UTable
+            :data="results"
+            :columns="columns"
+            class="w-full"
+            :loading="loading"
+          />
+        </UCard>
+      </div>
     </div>
 
     <div

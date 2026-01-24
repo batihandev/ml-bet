@@ -106,7 +106,8 @@ def run_backtest_sweep(
                     "profit": p,
                     "odds": best["odds"],
                     "ev": best["ev"],
-                    "edge": best["edge"]
+                    "edge": best["edge"],
+                    "outcome": best["outcome"]
                 })
                 
             if not bet_rows:
@@ -121,6 +122,23 @@ def run_backtest_sweep(
             profit = bdf["profit"].sum()
             bets = len(bdf)
             
+            # Diagnostics
+            n_home = int((bdf["outcome"] == "home").sum())
+            n_draw = int((bdf["outcome"] == "draw").sum())
+            n_away = int((bdf["outcome"] == "away").sum())
+            
+            avg_odds_h = float(round(bdf[bdf["outcome"] == "home"]["odds"].mean(), 2)) if n_home > 0 else 0.0
+            avg_odds_d = float(round(bdf[bdf["outcome"] == "draw"]["odds"].mean(), 2)) if n_draw > 0 else 0.0
+            avg_odds_a = float(round(bdf[bdf["outcome"] == "away"]["odds"].mean(), 2)) if n_away > 0 else 0.0
+
+            odds_buckets = {
+                "1-2": int(((bdf["odds"] >= 1) & (bdf["odds"] < 2)).sum()),
+                "2-3": int(((bdf["odds"] >= 2) & (bdf["odds"] < 3)).sum()),
+                "3-4": int(((bdf["odds"] >= 3) & (bdf["odds"] < 4)).sum()),
+                "4-6": int(((bdf["odds"] >= 4) & (bdf["odds"] < 6)).sum()),
+                "6+":  int((bdf["odds"] >= 6).sum()),
+            }
+
             cell = {
                 "min_edge": float(me),
                 "min_ev": float(mv),
@@ -128,8 +146,17 @@ def run_backtest_sweep(
                 "roi": float(round(profit / staked, 4)) if staked > 0 else 0.0,
                 "profit": float(round(profit, 2)),
                 "avg_odds": float(round(bdf["odds"].mean(), 2)),
+                "median_odds": float(round(bdf["odds"].median(), 2)),
+                "p90_odds": float(round(bdf["odds"].quantile(0.9), 2)),
                 "avg_ev": float(round(bdf["ev"].mean(), 4)),
-                "low_sample": bool(bets < min_bets)
+                "low_sample": bool(bets < min_bets),
+                # New diagnostics
+                "n_h": n_home, "n_d": n_draw, "n_a": n_away,
+                "pct_h": float(round(n_home / bets, 3)) if bets > 0 else 0.0,
+                "pct_d": float(round(n_draw / bets, 3)) if bets > 0 else 0.0,
+                "pct_a": float(round(n_away / bets, 3)) if bets > 0 else 0.0,
+                "avg_odds_h": avg_odds_h, "avg_odds_d": avg_odds_d, "avg_odds_a": avg_odds_a,
+                "odds_buckets": odds_buckets
             }
             
             cell["_raw_bdf"] = bdf 
