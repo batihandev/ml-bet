@@ -16,6 +16,7 @@ class BacktestRequest(BaseModel):
     stake: float = 1.0
     kelly_mult: float = 0.0
     selection_mode: str = "best_ev"
+    blend_alpha: float = 1.0
     debug: int = 0
 
 class SweepRequest(BaseModel):
@@ -23,6 +24,7 @@ class SweepRequest(BaseModel):
     end_date: Optional[str] = None
     edge_range: Tuple[float, float, float] = (0.0, 0.10, 0.01)
     ev_range: Tuple[float, float, float] = (0.0, 0.10, 0.01)
+    alpha_range: Tuple[float, float, float] = (1.0, 1.0, 1.0)
     stake: float = 1.0
     kelly_mult: float = 0.0
     min_bets: int = 300
@@ -39,6 +41,7 @@ def run_backtest_json(params: Dict[str, Any]) -> Dict[str, Any]:
         stake=float(params.get("stake", 1.0)),
         kelly_mult=float(params.get("kelly_mult", 0.0)),
         selection_mode=params.get("selection_mode", "best_ev"),
+        blend_alpha=float(params.get("blend_alpha", 1.0)),
         debug=int(params.get("debug", 0))
     )
     # Ensure serializability of dates
@@ -52,6 +55,7 @@ def run_backtest_json(params: Dict[str, Any]) -> Dict[str, Any]:
         "markets": result["markets"],
         "divisions": result["league_stats_df"].to_dict(orient="records") if not result["league_stats_df"].empty else [],
         "equity": result["daily_equity_df"].to_dict(orient="records") if not result["daily_equity_df"].empty else [],
+        "ev_deciles": result.get("ev_deciles", []),
         "bets": bets,
     }
 

@@ -49,6 +49,8 @@ def make_time_split(df: pd.DataFrame, fixed_cutoff: Optional[str] = None, defaul
 def select_feature_columns(df: pd.DataFrame, exclude_odds: bool = False) -> List[str]:
     # 1. Build Candidate List
     base_features = [
+        "home_elo", "away_elo", "form3_home", "form5_home", "form3_away", "form5_away",
+        "gap_elo", "abs_gap_elo", "gap_form3", "abs_gap_form3", "gap_form5", "abs_gap_form5",
         "odd_home", "odd_draw", "odd_away", "max_odd_home", "max_odd_draw", "max_odd_away",
         "odd_over25", "odd_under25", "max_odd_over25", "max_odd_under25",
         "handicap_size", "handicap_home", "handicap_away",

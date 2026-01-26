@@ -3,7 +3,7 @@ from .base import PROCESSED_DIR, load_processed_matches, add_basic_targets, add_
 from .history import build_team_history, merge_team_features
 from .h2h import add_h2h_features, N_H2H
 from .market import add_attack_strength, add_odds_features, add_rule_scores
-from .derived import add_draw_closeness_features
+from .derived import add_draw_closeness_features, add_pre_match_gap_features
 
 def build_features(df_matches: pd.DataFrame) -> pd.DataFrame:
     """
@@ -31,6 +31,7 @@ def build_features(df_matches: pd.DataFrame) -> pd.DataFrame:
     # Add derived features (Draw Closeness etc.)
     # Must run after history/market features are built
     df = add_draw_closeness_features(df)
+    df = add_pre_match_gap_features(df)
 
     return df
 

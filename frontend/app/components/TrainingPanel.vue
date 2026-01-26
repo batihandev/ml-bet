@@ -319,7 +319,17 @@ onMounted(() => {
               <h3 class="text-md font-semibold">OOF Calibration Metrics</h3>
               <div class="flex items-center gap-2">
                 <UBadge color="success" variant="subtle" size="md">
-                  Acc: {{ (modelMeta.metrics.accuracy * 100).toFixed(1) }}%
+                  Acc (Cal):
+                  {{ (modelMeta.metrics.accuracy * 100).toFixed(1) }}%
+                </UBadge>
+                <UBadge
+                  v-if="modelMeta.metrics_raw?.accuracy !== undefined"
+                  color="info"
+                  variant="subtle"
+                  size="md"
+                >
+                  Acc (Raw):
+                  {{ (modelMeta.metrics_raw.accuracy * 100).toFixed(1) }}%
                 </UBadge>
                 <UButton
                   variant="ghost"
@@ -345,14 +355,25 @@ onMounted(() => {
               <div
                 class="p-2 bg-gray-50 dark:bg-gray-800/50 rounded col-span-2"
               >
-                <p class="text-muted">Brier Score / Log Loss</p>
+                <p class="text-muted">Brier Score / Log Loss (Calibrated)</p>
                 <p class="font-bold">
                   {{ modelMeta.metrics.brier_score?.toFixed(4) }} /
                   {{ modelMeta.metrics.log_loss?.toFixed(4) }}
                 </p>
               </div>
+              <div
+                v-if="modelMeta.metrics_raw"
+                class="p-2 bg-gray-50 dark:bg-gray-800/50 rounded col-span-2"
+              >
+                <p class="text-muted">Brier Score / Log Loss (Raw)</p>
+                <p class="font-bold">
+                  {{ modelMeta.metrics_raw.brier_score?.toFixed(4) }} /
+                  {{ modelMeta.metrics_raw.log_loss?.toFixed(4) }}
+                </p>
+              </div>
             </div>
 
+            <p class="text-xs text-muted">Calibrated</p>
             <table class="w-full text-sm border-collapse">
               <thead>
                 <tr class="border-b border-gray-200 dark:border-gray-800">
@@ -387,6 +408,47 @@ onMounted(() => {
                 </tr>
               </tbody>
             </table>
+
+            <div v-if="modelMeta.metrics_raw" class="pt-2">
+              <p class="text-xs text-muted">Raw (Uncalibrated)</p>
+              <table class="w-full text-sm border-collapse">
+                <thead>
+                  <tr class="border-b border-gray-200 dark:border-gray-800">
+                    <th class="text-left py-1">Class</th>
+                    <th class="text-right">Prec</th>
+                    <th class="text-right">Rec</th>
+                    <th class="text-right">F1</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="(v, k) in modelMeta.metrics_raw
+                      .classification_report"
+                    :key="`raw-${String(k)}`"
+                    class="border-b border-gray-100 dark:border-gray-900 last:border-0"
+                  >
+                    <template v-if="['0', '1', '2'].includes(String(k))">
+                      <td class="py-1 font-medium">
+                        {{
+                          String(k) === '0'
+                            ? 'Home'
+                            : String(k) === '1'
+                              ? 'Draw'
+                              : 'Away'
+                        }}
+                      </td>
+                      <td class="text-right">{{ v.precision.toFixed(2) }}</td>
+                      <td class="text-right">{{ v.recall.toFixed(2) }}</td>
+                      <td class="text-right">
+                        {{
+                          v.f1_score?.toFixed(2) || v['f1-score']?.toFixed(2)
+                        }}
+                      </td>
+                    </template>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </UCard>
 

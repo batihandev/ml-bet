@@ -1,5 +1,11 @@
 from typing import Optional, Dict, Any, List
 
+# --- Sanity caps (tweak if needed) ---
+MAX_ODDS = 10.0       # avoid extreme longshots
+MAX_EV = 0.35         # reject unrealistically high EV
+MAX_EDGE = 0.35       # reject unrealistically high edge
+MIN_PROB = 0.02       # avoid ultra-low probability picks
+
 def metric_passes_gate(
     metric: Dict[str, Any],
     min_edge: float,
@@ -13,8 +19,9 @@ def metric_passes_gate(
     - Always require edge >= min_edge.
     - Only enforce EV if min_ev > 0. This reduces bias toward long odds when min_ev == 0.
 
+    Note: Sanity caps (MIN_PROB / MAX_ODDS / MAX_EV / MAX_EDGE) apply to all modes.
     For top_prob_always:
-    - Ignore edge/EV thresholds and accept any valid odds.
+    - Ignore edge/EV thresholds but still respect sanity caps.
     """
     if not metric:
         return False
@@ -23,8 +30,19 @@ def metric_passes_gate(
     if odds <= 1.0:
         return False
 
+    prob = float(metric.get("prob", 0.0))
     edge = float(metric.get("edge", -999.0))
     ev = float(metric.get("ev", -999.0))
+
+    # Sanity gates (independent of min_edge/min_ev)
+    if prob <= 0.0 or prob > 1.0:
+        return False
+    if prob < MIN_PROB:
+        return False
+    if odds > MAX_ODDS:
+        return False
+    if ev > MAX_EV or edge > MAX_EDGE:
+        return False
 
     if selection_mode == "top_prob_always":
         return True
@@ -52,7 +70,7 @@ def select_bet(
     - "top_prob": Among outcomes that pass min_edge and min_ev, select the one with max probability.
     - "top_prob_only": Consider ONLY the outcome with the highest probability.
       Uses edge gate always; EV gate is applied only if min_ev > 0.
-    - "top_prob_always": Always take the highest probability outcome (ignores min_edge/min_ev).
+    - "top_prob_always": Always take the highest probability outcome (ignores min_edge/min_ev, respects sanity caps).
     """
     if not metrics:
         return None

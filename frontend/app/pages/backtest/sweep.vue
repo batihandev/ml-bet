@@ -16,6 +16,9 @@ const form = reactive({
   evStart: 0.0,
   evEnd: 0.1,
   evStep: 0.01,
+  alphaStart: 0.0,
+  alphaEnd: 1.0,
+  alphaStep: 0.1,
   min_bets: 300,
   bootstrap_n: 1000,
   stake: 1.0,
@@ -26,6 +29,8 @@ const form = reactive({
 const loading = ref(false)
 const results = ref<any[]>([])
 const sweepStats = ref<any>(null)
+const alphaResults = ref<Record<string, any>>({})
+const selectedAlpha = ref<string>('')
 const showAllRows = ref(false)
 const detailsOpen = ref(false)
 const selectedCell = ref<any | null>(null)
@@ -40,15 +45,16 @@ async function runSweep() {
         end_date: form.endDate,
         edge_range: [form.edgeStart, form.edgeEnd, form.edgeStep],
         ev_range: [form.evStart, form.evEnd, form.evStep],
+        alpha_range: [form.alphaStart, form.alphaEnd, form.alphaStep],
         stake: form.stake,
         kelly_mult: form.kelly_mult,
         min_bets: form.min_bets,
         bootstrap_n: form.bootstrap_n,
-        selection_mode: form.selectionMode
+        selection_mode: form.selectionMode,
+        debug: 0
       }
     })
-    results.value = res.cells || []
-    sweepStats.value = res.summary || {}
+    loadSweepResults(res)
   } catch (err) {
     console.error('Sweep error', err)
   } finally {
@@ -61,10 +67,8 @@ async function fetchLatestSweep() {
     const res = await $fetch<any>(
       `${config.public.apiBase}/backtest/latest-sweep`
     )
-    if (res && res.cells) {
-      results.value = res.cells
-      sweepStats.value = res.summary || {}
-
+    if (res && (res.cells || res.alpha_results)) {
+      loadSweepResults(res)
       // Form values are preserved as defaults, results are loaded separately
     }
   } catch (err) {
@@ -77,16 +81,25 @@ onMounted(() => {
 })
 
 function runSingleBacktest(cell: any) {
+  const alpha =
+    cell?.alpha !== undefined && cell?.alpha !== null
+      ? parseFloat(String(cell.alpha))
+      : selectedAlpha.value
+        ? parseFloat(selectedAlpha.value)
+        : (sweepStats.value?.blend_alpha ?? 1)
+  const startDate = sweepStats.value?.start_date || form.startDate
+  const endDate = sweepStats.value?.end_date || form.endDate
   router.push({
     path: '/backtest',
     query: {
-      startDate: form.startDate,
-      endDate: form.endDate,
+      startDate,
+      endDate,
       minEdge: cell.min_edge,
       minEv: cell.min_ev,
       stake: form.stake,
       kellyMult: form.kelly_mult,
       selectionMode: form.selectionMode,
+      blendAlpha: alpha,
       autoRun: 'true'
     }
   })
@@ -103,7 +116,8 @@ const getAnyPasses = (cell: any) =>
   cell?.n_any_passes_gate ?? cell?.n_any_outcome_value ?? 0
 
 const formatPercent = (num?: number, denom?: number) => {
-  if (!denom || !Number.isFinite(num) || !Number.isFinite(denom)) return '–'
+  if (!denom || !Number.isFinite(num) || !Number.isFinite(denom))
+    return '–'
   return `${((num / denom) * 100).toFixed(1)}%`
 }
 
@@ -120,10 +134,69 @@ const formatMix = (mix?: { home?: number; draw?: number; away?: number }) => {
   return `${(home * 100).toFixed(1)}% H / ${(draw * 100).toFixed(1)}% D / ${(away * 100).toFixed(1)}% A`
 }
 
-const topResults = computed(() => {
-  if (showAllRows.value) return results.value
-  return results.value.slice(0, 8)
+const allCells = computed(() => {
+  const alphas = Object.keys(alphaResults.value || {})
+  if (alphas.length) {
+    return alphas.flatMap((alpha) => {
+      const payload = alphaResults.value?.[alpha]
+      const cells = payload?.cells || []
+      return cells.map((cell: any) => ({ ...cell, alpha }))
+    })
+  }
+  const fallbackAlpha =
+    selectedAlpha.value || (sweepStats.value?.blend_alpha ?? '1')
+  return results.value.map((cell) => ({ ...cell, alpha: fallbackAlpha }))
 })
+
+const sortedAllCells = computed(() => {
+  return [...allCells.value].sort((a, b) => {
+    const ap = a?.roi_p05 ?? -999
+    const bp = b?.roi_p05 ?? -999
+    if (bp !== ap) return bp - ap
+    return (b?.roi ?? 0) - (a?.roi ?? 0)
+  })
+})
+
+const topResults = computed(() => {
+  const src = sortedAllCells.value
+  if (showAllRows.value) return src
+  return src.slice(0, 8)
+})
+
+const alphaOptions = computed(() => {
+  const keys = Object.keys(alphaResults.value || {})
+  const sorted = keys.sort((a, b) => parseFloat(a) - parseFloat(b))
+  return sorted.map((k) => ({ label: k, value: k }))
+})
+
+function loadSweepResults(res: any) {
+  if (res?.alpha_results) {
+    alphaResults.value = res.alpha_results || {}
+    const preferred =
+      res.default_alpha ||
+      (alphaResults.value['1'] ? '1' : Object.keys(alphaResults.value)[0] || '')
+    if (preferred) {
+      applyAlpha(preferred)
+    }
+  } else {
+    alphaResults.value = {}
+    selectedAlpha.value = ''
+    results.value = res.cells || []
+    sweepStats.value = res.summary || {}
+  }
+}
+
+function applyAlpha(alpha: string) {
+  const payload = alphaResults.value?.[alpha]
+  if (!payload) return
+  selectedAlpha.value = alpha
+  results.value = payload.cells || []
+  sweepStats.value = payload.summary || {}
+}
+
+function selectAlpha(alpha: string) {
+  applyAlpha(alpha)
+}
 
 const columns: TableColumn<any>[] = [
   {
@@ -141,6 +214,17 @@ const columns: TableColumn<any>[] = [
   },
   { accessorKey: 'min_edge', header: 'Min Edge' },
   { accessorKey: 'min_ev', header: 'Min EV' },
+  {
+    accessorKey: 'alpha',
+    header: 'Alpha',
+    cell: ({ row }) => {
+      const v = row.original.alpha
+      if (v === undefined || v === null) return '–'
+      return Number.isFinite(parseFloat(String(v)))
+        ? parseFloat(String(v)).toFixed(2).replace(/\.00$/, '')
+        : String(v)
+    }
+  },
   { accessorKey: 'bets', header: 'Bets' },
   {
     accessorKey: 'roi',
@@ -304,6 +388,37 @@ function getHeatmapColor(roi: number, bets: number) {
               />
             </div>
           </div>
+          <div class="space-y-2">
+            <span class="text-xs font-medium text-muted"
+              >Alpha Range (Start, End, Step)</span
+            >
+            <div class="flex gap-2">
+              <UInput
+                v-model.number="form.alphaStart"
+                type="number"
+                step="0.05"
+                min="0"
+                max="1"
+                class="w-full"
+              />
+              <UInput
+                v-model.number="form.alphaEnd"
+                type="number"
+                step="0.05"
+                min="0"
+                max="1"
+                class="w-full"
+              />
+              <UInput
+                v-model.number="form.alphaStep"
+                type="number"
+                step="0.05"
+                min="0.01"
+                max="1"
+                class="w-full"
+              />
+            </div>
+          </div>
           <div class="space-y-2 flex flex-col">
             <span class="text-xs font-medium">Selection Mode</span>
             <USelect
@@ -338,9 +453,20 @@ function getHeatmapColor(roi: number, bets: number) {
         variant="soft"
         color="primary"
         title="Loaded Sweep Results"
-        :description="`Showing results from ${sweepStats.start_date} to ${sweepStats.end_date}. Edge: ${sweepStats.edge_range?.[0]}-${sweepStats.edge_range?.[1]}, EV: ${sweepStats.ev_range?.[0]}-${sweepStats.ev_range?.[1]}. Mode: ${sweepStats.selection_mode}. Min Bets: ${sweepStats.min_bets}`"
+        :description="`Showing results from ${sweepStats.start_date} to ${sweepStats.end_date}. Edge: ${sweepStats.edge_range?.[0]}-${sweepStats.edge_range?.[1]}, EV: ${sweepStats.ev_range?.[0]}-${sweepStats.ev_range?.[1]}. Mode: ${sweepStats.selection_mode}. Alpha: ${selectedAlpha || (sweepStats.blend_alpha ?? 1)}. Min Bets: ${sweepStats.min_bets}`"
         icon="i-lucide-info"
       />
+      <div
+        v-if="alphaOptions.length"
+        class="flex items-center gap-2 text-xs text-muted -mt-2"
+      >
+        <span>Alpha view:</span>
+        <USelect
+          v-model="selectedAlpha"
+          :items="alphaOptions"
+          @update:modelValue="selectAlpha"
+        />
+      </div>
 
       <div class="grid gap-6 lg:grid-cols-2">
         <!-- Heatmap Grid -->

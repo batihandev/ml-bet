@@ -29,6 +29,7 @@ def backtest_production_1x2(
     stake: float = 1.0,
     kelly_mult: float = 0.0,
     selection_mode: str = "best_ev",
+    blend_alpha: float = 1.0,
     debug: int = 0,
 ) -> Dict[str, Any]:
     """
@@ -70,7 +71,8 @@ def backtest_production_1x2(
                 "outcome_mix": {"home": 0.0, "draw": 0.0, "away": 0.0},
                 "status": "Not available (no labeled data after cutoff)"
             },
-            "markets": [], "league_stats_df": pd.DataFrame(), "daily_equity_df": pd.DataFrame(), "bets_df": pd.DataFrame()
+            "markets": [], "league_stats_df": pd.DataFrame(), "daily_equity_df": pd.DataFrame(), "bets_df": pd.DataFrame(),
+            "ev_deciles": []
         }
 
     resolved_start = pd.to_datetime(start_date) if start_date else data_min
@@ -98,7 +100,8 @@ def backtest_production_1x2(
                 "outcome_mix": {"home": 0.0, "draw": 0.0, "away": 0.0},
                 "status": "No matches in window"
             },
-            "markets": [], "league_stats_df": pd.DataFrame(), "daily_equity_df": pd.DataFrame(), "bets_df": pd.DataFrame()
+            "markets": [], "league_stats_df": pd.DataFrame(), "daily_equity_df": pd.DataFrame(), "bets_df": pd.DataFrame(),
+            "ev_deciles": []
         }
 
     total_labeled_matches = len(df_bt)
@@ -119,6 +122,34 @@ def backtest_production_1x2(
     skipped_invalid_odds = 0
     skipped_no_value = 0
     
+    # Clamp blend alpha to [0, 1]
+    try:
+        blend_alpha = float(blend_alpha)
+    except Exception:
+        blend_alpha = 1.0
+    blend_alpha = max(0.0, min(1.0, blend_alpha))
+
+    def apply_blend(metrics: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not metrics or blend_alpha >= 0.999:
+            return metrics
+        blended = []
+        for m in metrics:
+            if "pimp" not in m or m.get("pimp") is None:
+                blended.append(m)
+                continue
+            prob_model = float(m.get("prob", 0.0))
+            prob_implied = float(m.get("pimp", 0.0))
+            odds = float(m.get("odds", 0.0))
+            prob_blend = (blend_alpha * prob_model) + ((1.0 - blend_alpha) * prob_implied)
+            m_new = dict(m)
+            m_new["prob_model"] = prob_model
+            m_new["prob_implied"] = prob_implied
+            m_new["prob"] = prob_blend
+            m_new["edge"] = prob_blend - prob_implied
+            m_new["ev"] = prob_blend * odds - 1.0
+            blended.append(m_new)
+        return blended
+
     bankroll = float(stake) if kelly_mult > 0 else None
 
     for _, match_row in df_bt.iterrows():
@@ -143,15 +174,17 @@ def backtest_production_1x2(
             skipped_invalid_odds += 1
             continue
 
+        metrics_used = apply_blend(metrics)
+
         # ALL_VALID group
-        top_metric = max(metrics, key=lambda x: x["prob"])
+        top_metric = max(metrics_used, key=lambda x: x["prob"])
         group_top_prob_all_valid.append({
             "outcome": top_metric["outcome"],
             "odds": top_metric["odds"]
         })
 
         # ANY_PASSES_GATE check
-        any_passes = any(metric_passes_gate(m, min_edge, min_ev, selection_mode) for m in metrics)
+        any_passes = any(metric_passes_gate(m, min_edge, min_ev, selection_mode) for m in metrics_used)
         if any_passes:
             n_any_passes_gate += 1
 
@@ -165,7 +198,7 @@ def backtest_production_1x2(
             })
 
         # Best bet selection
-        best_bet = select_bet(metrics, min_edge, min_ev, selection_mode)
+        best_bet = select_bet(metrics_used, min_edge, min_ev, selection_mode)
         if not best_bet:
             skipped_no_value += 1
             continue
@@ -221,7 +254,8 @@ def backtest_production_1x2(
         "min_ev": float(min_ev),
         "stake": float(stake),
         "kelly_mult": float(kelly_mult),
-        "selection_mode": selection_mode
+        "selection_mode": selection_mode,
+        "blend_alpha": float(blend_alpha)
     }
 
     # Summary construction with diagnostics
@@ -289,7 +323,8 @@ def backtest_production_1x2(
 
         return {
             "summary": summary,
-            "markets": [], "league_stats_df": pd.DataFrame(), "daily_equity_df": pd.DataFrame(), "bets_df": pd.DataFrame()
+            "markets": [], "league_stats_df": pd.DataFrame(), "daily_equity_df": pd.DataFrame(), "bets_df": pd.DataFrame(),
+            "ev_deciles": []
         }
 
     bets_df = pd.DataFrame(bet_rows)
@@ -335,6 +370,39 @@ def backtest_production_1x2(
 
     # Bootstrap CI
     ci_res = bootstrap_roi(bets_df, n=1000)
+
+    # EV decile diagnostics (selected bets only)
+    def build_ev_deciles(df: pd.DataFrame, n_bins: int = 10) -> List[Dict[str, Any]]:
+        if df.empty:
+            return []
+        d = df.copy()
+        d = d.replace([np.inf, -np.inf], np.nan)
+        d = d.dropna(subset=["selected_ev", "stake", "profit"])
+        if d.empty:
+            return []
+        n_bins = min(n_bins, len(d))
+        d = d.sort_values("selected_ev").reset_index(drop=True)
+        d["rank"] = np.arange(1, len(d) + 1)
+        d["ev_bin"] = pd.qcut(d["rank"], q=n_bins, labels=False, duplicates="drop")
+        out = []
+        for b in sorted(d["ev_bin"].unique()):
+            sub = d[d["ev_bin"] == b]
+            staked = sub["stake"].sum()
+            profit = sub["profit"].sum()
+            out.append({
+                "decile": int(b) + 1,
+                "count": int(len(sub)),
+                "avg_ev": float(round(sub["selected_ev"].mean(), 4)),
+                "avg_edge": float(round(sub["selected_edge"].mean(), 4)),
+                "avg_odds": float(round(sub["selected_odds"].mean(), 3)),
+                "roi": float(round((profit / staked) if staked > 0 else 0.0, 4)),
+                "hit_rate": float(round(sub["is_win"].mean(), 4)),
+                "ev_min": float(round(sub["selected_ev"].min(), 4)),
+                "ev_max": float(round(sub["selected_ev"].max(), 4)),
+            })
+        return out
+
+    ev_deciles = build_ev_deciles(bets_df)
     
     summary = {
         "total_labeled_matches": total_labeled_matches,
@@ -390,7 +458,8 @@ def backtest_production_1x2(
         }],
         "league_stats_df": league_stats_df,
         "daily_equity_df": daily_equity_df,
-        "bets_df": bets_df
+        "bets_df": bets_df,
+        "ev_deciles": ev_deciles
     }
 
 if __name__ == "__main__":

@@ -5,14 +5,21 @@ import type { TableColumn } from '@nuxt/ui'
 const config = useRuntimeConfig()
 const route = useRoute()
 
+const numFromQuery = (value: unknown, fallback: number) => {
+  if (value === undefined || value === null || value === '') return fallback
+  const n = parseFloat(String(value))
+  return Number.isFinite(n) ? n : fallback
+}
+
 const form = reactive({
   startDate: (route.query.startDate as string) || '2024-12-30',
   endDate: (route.query.endDate as string) || '2025-06-30',
-  minEdge: parseFloat(route.query.minEdge as string) || 0.05,
-  minEv: parseFloat(route.query.minEv as string) || 0.0,
-  stake: parseFloat(route.query.stake as string) || 1,
-  kellyMult: parseFloat(route.query.kellyMult as string) || 0,
-  selectionMode: (route.query.selectionMode as string) || 'best_ev'
+  minEdge: numFromQuery(route.query.minEdge, 0.05),
+  minEv: numFromQuery(route.query.minEv, 0.0),
+  stake: numFromQuery(route.query.stake, 1),
+  kellyMult: numFromQuery(route.query.kellyMult, 0),
+  selectionMode: (route.query.selectionMode as string) || 'best_ev',
+  blendAlpha: numFromQuery(route.query.blendAlpha, 1.0)
 })
 
 // Default TRAINING_CUTOFF from training preset
@@ -126,10 +133,23 @@ type DivisionRow = {
   roi: number
 }
 
+type EvDecileRow = {
+  decile: number
+  count: number
+  avg_ev: number
+  avg_edge: number
+  avg_odds: number
+  roi: number
+  hit_rate: number
+  ev_min: number
+  ev_max: number
+}
+
 const summary = ref<Summary | null>(null)
 const markets = ref<MarketRow[]>([])
 const divisions = ref<DivisionRow[]>([])
 const equity = ref<any[]>([])
+const evDeciles = ref<EvDecileRow[]>([])
 
 // --- Nuxt UI v4 columns ------------------------------------------------
 
@@ -190,6 +210,43 @@ const divisionColumns: TableColumn<DivisionRow>[] = [
   }
 ]
 
+const evDecileColumns: TableColumn<EvDecileRow>[] = [
+  { accessorKey: 'decile', header: 'Decile' },
+  { accessorKey: 'count', header: 'Bets' },
+  {
+    id: 'ev_range',
+    header: 'EV Range',
+    cell: ({ row }) => {
+      const min = row.original.ev_min
+      const max = row.original.ev_max
+      if (!Number.isFinite(min) || !Number.isFinite(max)) return '–'
+      return `${min.toFixed(3)} → ${max.toFixed(3)}`
+    }
+  },
+  {
+    accessorKey: 'avg_ev',
+    header: 'Avg EV',
+    cell: ({ row }) => (row.getValue('avg_ev') as number)?.toFixed(3)
+  },
+  {
+    accessorKey: 'roi',
+    header: 'ROI',
+    cell: ({ row }) => {
+      const v = (row.getValue('roi') as number) ?? 0
+      const cls = v >= 0 ? 'text-emerald-500' : 'text-red-500'
+      return h('span', { class: cls }, `${(v * 100).toFixed(1)}%`)
+    }
+  },
+  {
+    accessorKey: 'hit_rate',
+    header: 'Hit rate',
+    cell: ({ row }) => {
+      const v = (row.getValue('hit_rate') as number) ?? 0
+      return `${(v * 100).toFixed(1)}%`
+    }
+  }
+]
+
 // --- Backtest call -----------------------------------------------------
 
 async function runBacktest() {
@@ -201,6 +258,7 @@ async function runBacktest() {
       markets: MarketRow[]
       divisions: DivisionRow[]
       equity: any[]
+      ev_deciles: EvDecileRow[]
     }>(`${config.public.apiBase}/backtest/ft-1x2`, {
       method: 'POST',
       body: {
@@ -210,7 +268,8 @@ async function runBacktest() {
         min_ev: form.minEv,
         stake: form.stake,
         kelly_mult: form.kellyMult,
-        selection_mode: form.selectionMode
+        selection_mode: form.selectionMode,
+        blend_alpha: form.blendAlpha
       }
     })
 
@@ -218,6 +277,7 @@ async function runBacktest() {
     markets.value = res.markets ?? []
     divisions.value = res.divisions ?? []
     equity.value = res.equity ?? []
+    evDeciles.value = res.ev_deciles ?? []
   } catch (err) {
     console.error('Backtest error', err)
   } finally {
@@ -276,6 +336,20 @@ async function runBacktest() {
                 min="-0.5"
                 max="0.5"
                 placeholder="0.0"
+              />
+            </UFormField>
+
+            <UFormField
+              label="Blend Alpha"
+              help="1.0 = model only, 0.0 = market only."
+            >
+              <UInput
+                v-model.number="form.blendAlpha"
+                type="number"
+                step="0.05"
+                min="0"
+                max="1"
+                placeholder="1.0"
               />
             </UFormField>
 
@@ -488,6 +562,19 @@ async function runBacktest() {
           />
         </UCard>
       </div>
+
+      <UCard>
+        <h3 class="mb-3 text-sm font-semibold">EV deciles (low → high)</h3>
+        <PerformanceTable
+          :data="evDeciles"
+          :columns="evDecileColumns"
+          empty-message="Run a backtest to see how ROI changes across EV buckets."
+        />
+        <p class="mt-2 text-[11px] text-muted">
+          If EV is meaningful, ROI should generally increase from low to high
+          deciles.
+        </p>
+      </UCard>
     </div>
   </UPageSection>
 </template>

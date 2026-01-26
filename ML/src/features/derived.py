@@ -112,3 +112,31 @@ def add_draw_closeness_features(df: pd.DataFrame) -> pd.DataFrame:
              df[ppg_abs_gap_name] = df[ppg_gap_name].abs()
 
     return df
+
+def add_pre_match_gap_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add gap/abs_gap features from pre-match columns that already exist in raw data.
+    These are safe only if the source columns are pre-match inputs.
+    """
+    df = df.copy()
+
+    def add_gap(home_col: str, away_col: str, name: str) -> None:
+        if home_col not in df.columns or away_col not in df.columns:
+            return
+        gap_col = f"gap_{name}"
+        abs_gap_col = f"abs_gap_{name}"
+        if gap_col in df.columns:
+            return
+        h = pd.to_numeric(df[home_col], errors="coerce")
+        a = pd.to_numeric(df[away_col], errors="coerce")
+        df[gap_col] = h - a
+        df[abs_gap_col] = df[gap_col].abs()
+
+    # Elo / rating style columns
+    add_gap("home_elo", "away_elo", "elo")
+
+    # Vendor-provided short form columns (if present)
+    add_gap("form3_home", "form3_away", "form3")
+    add_gap("form5_home", "form5_away", "form5")
+
+    return df

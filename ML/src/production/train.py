@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, accuracy_score
+from sklearn.metrics import classification_report, accuracy_score, log_loss
 from dataset.cleaner import select_feature_columns, filter_insufficient_history
 from .schema import TARGET_COL, CLASS_MAPPING
 from .utils import build_time_folds, ProbabilityCalibrator
@@ -78,6 +78,7 @@ def train_production_model(
     oof_preds = []
     oof_targets = []
     oof_dates = []
+    oof_metrics_raw = {}
     
     # If OOF disabled, force calibration to none
     if not oof_calibration and calibration_method != "none":
@@ -139,27 +140,41 @@ def train_production_model(
             calibrator = ProbabilityCalibrator(method=calibration_method)
             calibrator.fit(oof_preds_agg, oof_targets_agg)
             
-            # Evaluate OOF
+            # Evaluate OOF (raw vs calibrated)
             p_cal = calibrator.transform(oof_preds_agg)
-            y_pred = np.argmax(p_cal, axis=1)
-            
-            acc = accuracy_score(oof_targets_agg, y_pred)
-            from sklearn.metrics import log_loss
-            loss = log_loss(oof_targets_agg, p_cal)
-            
-            # Multiclass Brier
-            y_true_onehot = pd.get_dummies(oof_targets_agg).reindex(columns=[0, 1, 2], fill_value=0).values
-            brier = np.mean(np.sum((p_cal - y_true_onehot)**2, axis=1))
-            
-            report_dict = classification_report(oof_targets_agg, y_pred, output_dict=True)
-            report_str = classification_report(oof_targets_agg, y_pred)
+
+            def compute_oof_metrics(p_in, y_true):
+                # Clip + renormalize to avoid log-loss inf and keep valid rows
+                p = np.clip(p_in, 1e-6, 1 - 1e-6)
+                row_sums = p.sum(axis=1, keepdims=True)
+                row_sums[row_sums == 0] = 1.0
+                p = p / row_sums
+
+                y_pred = np.argmax(p, axis=1)
+                acc = accuracy_score(y_true, y_pred)
+                loss = log_loss(y_true, p)
+
+                # Multiclass Brier
+                y_true_onehot = pd.get_dummies(y_true).reindex(columns=[0, 1, 2], fill_value=0).values
+                brier = np.mean(np.sum((p - y_true_onehot) ** 2, axis=1))
+
+                report_dict = classification_report(y_true, y_pred, output_dict=True)
+                report_str = classification_report(y_true, y_pred)
+                metrics = {
+                    "accuracy": acc,
+                    "log_loss": loss,
+                    "brier_score": brier,
+                    "classification_report": report_dict,
+                }
+                return metrics, y_pred, report_str
+
+            metrics_raw, y_pred_raw, report_raw = compute_oof_metrics(oof_preds_agg, oof_targets_agg)
+            metrics_cal, y_pred, report_str = compute_oof_metrics(p_cal, oof_targets_agg)
             
             # --- 5 & 6. Draw Specific Analysis ---
             draw_idx = CLASS_MAPPING["draw"]
             
             # Raw predictions (argmax)
-            y_pred_raw = np.argmax(oof_preds_agg, axis=1)
-            
             # Draw Recall/F1 Comparison
             from sklearn.metrics import recall_score, f1_score
             rec_raw = recall_score(oof_targets_agg, y_pred_raw, labels=[draw_idx], average=None)[0]
@@ -188,19 +203,17 @@ def train_production_model(
             print("===========================\n")
             
             
-            oof_metrics = {
-                "accuracy": acc,
-                "log_loss": loss,
-                "brier_score": brier,
-                "classification_report": report_dict,
+            oof_context = {
                 "n_folds": len(folds),
                 "n_oof_rows": len(oof_targets_agg),
                 "oof_date_range": f"{min(oof_dates).date()} to {max(oof_dates).date()}"
             }
+            oof_metrics = {**metrics_cal, **oof_context}
+            oof_metrics_raw = {**metrics_raw, **oof_context}
             
-            print(f"OOF Accuracy: {acc:.4f}")
-            print(f"OOF Log Loss: {loss:.4f}")
-            print(f"OOF Brier Score: {brier:.4f}")
+            print(f"OOF Accuracy (Cal): {metrics_cal['accuracy']:.4f} | Raw: {metrics_raw['accuracy']:.4f}")
+            print(f"OOF Log Loss (Cal): {metrics_cal['log_loss']:.4f} | Raw: {metrics_raw['log_loss']:.4f}")
+            print(f"OOF Brier Score (Cal): {metrics_cal['brier_score']:.4f} | Raw: {metrics_raw['brier_score']:.4f}")
             print("\nClassification Report (OOF):\n", report_str)
     else:
         print("OOF Calibration DISABLED. Training final model only.")
@@ -249,6 +262,7 @@ def train_production_model(
             "data_end": real_data_end
         },
         "oof": oof_metrics,
+        "oof_raw": oof_metrics_raw,
         "feature_importance": feature_importance
     }, model_path)
     
@@ -270,6 +284,7 @@ def train_production_model(
                 "min_samples_leaf": min_samples_leaf
             },
             "metrics": oof_metrics,
+            "metrics_raw": oof_metrics_raw,
             "backtest_eligible_from": str((t_cutoff_dt + pd.Timedelta(days=1)).date()),
             "data_end": real_data_end
         }, f, indent=2)
