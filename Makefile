@@ -1,49 +1,39 @@
-PYTHON=python3
-VENV=.venv
-PIP=$(VENV)/bin/pip
+UV=uv
+PROJECT_DIR=ML
 
 # default target
 help:
 	@echo "Available make targets:"
-	@echo " make venv        - create virtual environment"
 	@echo " make install     - install python dependencies"
-	@echo " make activate    - instructions for activating shell"
-	@echo " make clean       - remove virtual environment"
 	@echo " make dataset     - run dataset build script"
 	@echo " make features    - run feature generation script"
 	@echo " make train       - run training script"
 	@echo " make predict     - run prediction script"
-
-# create virtual env only if missing
-venv:
-	test -d $(VENV) || $(PYTHON) -m venv $(VENV)
+	@echo " make backend     - run the api backend"
+	@echo " make clean       - remove uv artifacts"
 
 # install dependencies
-install: venv
-	$(PIP) install -r ML/requirements.txt
-
-activate:
-	@echo "To activate the venv, run:"
-	@echo " source $(VENV)/bin/activate"
+install:
+	$(UV) sync --project $(PROJECT_DIR)
 
 dataset:
-	$(VENV)/bin/python ML/src/dataset/cli.py
+	$(UV) run --project $(PROJECT_DIR) python $(PROJECT_DIR)/src/dataset/cli.py
 
 features:
-	$(VENV)/bin/python ML/src/features/pipeline.py
+	$(UV) run --project $(PROJECT_DIR) python $(PROJECT_DIR)/src/features/pipeline.py
 
 train:
-	$(VENV)/bin/python ML/src/training/cli.py
+	$(UV) run --project $(PROJECT_DIR) python $(PROJECT_DIR)/src/training/cli.py
 
 train_last5:
 	TRAIN_START_DATE=$(shell date -d '5 years ago' +%Y-%m-%d) \
-	$(VENV)/bin/python ML/src/train_model.py
+	$(UV) run --project $(PROJECT_DIR) python $(PROJECT_DIR)/src/train_model.py
 
 predict:
-	$(VENV)/bin/python ML/src/prediction/cli.py
+	$(UV) run --project $(PROJECT_DIR) python $(PROJECT_DIR)/src/prediction/cli.py
 
 clean:
-	rm -rf $(VENV)
+	rm -rf $(PROJECT_DIR)/.venv $(PROJECT_DIR)/uv.lock
 
 
 
@@ -105,7 +95,7 @@ clean:
 # make backtest_ft START=2023-01-01 END=2025-06-01 EDGE=0.030 STAKE=1 OUT_CSV=/dev/null OUT_MD=/dev/null
 
 backtest_ft:
-	$(VENV)/bin/python ML/src/backtest/cli.py \
+	$(UV) run --project $(PROJECT_DIR) python $(PROJECT_DIR)/src/backtest/cli.py \
 		--start-date $(START) \
 		--end-date $(END) \
 		--min-edge $(EDGE) \
@@ -121,7 +111,7 @@ train_window_5y:
 	TRAIN_START_DATE=$$(date -d "$(START) -5 years" +%Y-%m-%d) \
 	TRAIN_END_DATE=$(START) \
 	FIXED_CUTOFF_DATE=$$(date -d "$(START) -4 months" +%Y-%m-%d) \
-	$(VENV)/bin/python ML/src/train_model.py
+	$(UV) run --project $(PROJECT_DIR) python $(PROJECT_DIR)/src/train_model.py
 
 
 # Low edge threshold: most inclusive, many small edges. Expect many bets, low volatility, small ROI per bet.
@@ -156,14 +146,14 @@ train_for_2025H1:
 	TRAIN_START_DATE=2020-01-01 \
 	TRAIN_END_DATE=2024-06-01 \
 	FIXED_CUTOFF_DATE=2023-12-01 \
-	$(VENV)/bin/python ML/src/train_model.py
+	$(UV) run --project $(PROJECT_DIR) python $(PROJECT_DIR)/src/train_model.py
 
 train_for_long:
 	TRAIN_START_DATE=2016-07-15 \
 	TRAIN_END_DATE=2024-06-01 \
 	FIXED_CUTOFF_DATE=2023-12-01 \
-	$(VENV)/bin/python ML/src/training/cli.py
+	$(UV) run --project $(PROJECT_DIR) python $(PROJECT_DIR)/src/training/cli.py
 
 
 backend:
-	PYTHONPATH=ML/src $(VENV)/bin/python -m uvicorn api.main:app --reload --port 8050
+	PYTHONPATH=$(PROJECT_DIR)/src $(UV) run --project $(PROJECT_DIR) python -m uvicorn api.main:app --reload --port 8050

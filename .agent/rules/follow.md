@@ -44,11 +44,11 @@ Reduce redundancy and improve maintainability by ensuring every piece of logic h
 
 ## Python Execution Rules
 
-1. **Always use the virtual environment**: Execute python using [.venv/bin/python](cci:7://file:///home/batih/personal/football-bet/.venv/bin/python:0:0-0:0).
-2. **Set PYTHONPATH**: Always prepend `PYTHONPATH=ML/src` to resolve imports correctly (e.g., `from production...`).
+1. **Always use uv**: Use `uv run` to manage the environment and dependencies for the [ML](file:///home/batih/personal/football-bet/ML) backend.
+2. **Set PYTHONPATH**: Always prepend `PYTHONPATH=ML/src` (or use the variable in commands) to resolve imports correctly (e.g., `from production...`).
 3. **Command Pattern**:
-   - Run scripts: `PYTHONPATH=ML/src .venv/bin/python path/to/script.py`
-   - Run tests: `PYTHONPATH=ML/src .venv/bin/python -m unittest path/to/test.py`
+   - Run scripts: `PYTHONPATH=ML/src uv run --project ML python path/to/script.py`
+   - Run tests: `PYTHONPATH=ML/src uv run --project ML python -m unittest path/to/test.py`
 
 ## Frontend (Nuxt) Routing Rules
 
